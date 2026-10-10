@@ -64,3 +64,6 @@ markers = ["integration: needs docker compose services"]
 
 [tool.coverage.run]
 source = ["core", "parser"]
+
+[tool.ruff.lint.per-file-ignores]
+"infra/migrations/versions/*" = ["E501"]

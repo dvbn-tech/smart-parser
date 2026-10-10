@@ -6,7 +6,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlalchemy import (
     BigInteger,
@@ -27,7 +27,7 @@ from sqlalchemy.types import TIMESTAMP
 
 
 class Base(DeclarativeBase):
-    type_annotation_map = {datetime: TIMESTAMP(timezone=True)}
+    type_annotation_map: ClassVar[dict[Any, Any]] = {datetime: TIMESTAMP(timezone=True)}
 
 
 # --- Списки: бренды и креаторы брендов -------------------------------------------------
