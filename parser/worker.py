@@ -19,6 +19,9 @@ from parser.queue import tasks as q
 
 log = structlog.get_logger()
 LOW_PRIORITY_EVERY = 5  # 20% слотов — низшим приоритетам
+# Предохранитель: столько блокировок подряд (429, стена логина) — воркер останавливается.
+# Не обходим защиту, а прекращаем нагрузку (техспека §6).
+MAX_CONSECUTIVE_BLOCKS = 3
 
 SourceFactory = Callable[[str], AbstractAsyncContextManager[Source]]
 
@@ -31,17 +34,19 @@ async def work(
     once: bool = False,
     max_tasks: int | None = None,
     idle_sleep_s: float = 5.0,
+    types: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     done: list[dict[str, Any]] = []
     slot = 0
+    blocks = 0
     while max_tasks is None or len(done) < max_tasks:
         async with session_scope() as s:
             await q.recover_expired_leases(s)
             await s.commit()
             low = slot % LOW_PRIORITY_EVERY == LOW_PRIORITY_EVERY - 1
-            task = await q.claim(s, low_priority_slot=low)
+            task = await q.claim(s, low_priority_slot=low, types=types)
             if task is None and low:
-                task = await q.claim(s)
+                task = await q.claim(s, types=types)
             await s.commit()
             slot += 1
             if task is None:
@@ -61,4 +66,8 @@ async def work(
             }
             log.info("task_done", **result)
             done.append(result)
+            blocks = blocks + 1 if status == "deferred" else 0
+            if blocks >= MAX_CONSECUTIVE_BLOCKS:
+                log.warning("circuit_breaker_open", consecutive_blocks=blocks)
+                break
     return done

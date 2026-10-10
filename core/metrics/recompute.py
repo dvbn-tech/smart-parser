@@ -75,6 +75,22 @@ async def _media_brand(session: AsyncSession) -> int:
         shop_names = {bid: by_pk[pk] for bid, pk in shop_pk.items() if pk in by_pk}
     tags = {b.id: {t.lower() for t in b.hashtags} for b in brands}
 
+    # Известные артикулы брендов: WW-код или артикул WB в подписи → ролик бренда
+    brand_by_article: dict[tuple[str, str], set[int]] = defaultdict(set)
+    for bid, kind, value in await session.execute(
+        text("SELECT brand_id, kind, value FROM brand_article")
+    ):
+        brand_by_article[("ww_code" if kind == "ww" else "wb_article", value)].add(bid)
+    article_brands: dict[int, set[int]] = defaultdict(set)
+    if brand_by_article:
+        for media_pk, kind, value in await session.execute(
+            text(
+                "SELECT media_pk, kind, value FROM media_signal"
+                " WHERE kind IN ('ww_code', 'wb_article')"
+            )
+        ):
+            article_brands[media_pk] |= brand_by_article.get((kind, value), set())
+
     rows_out: list[dict[str, object]] = []
     medias = await session.execute(
         select(
@@ -106,6 +122,8 @@ async def _media_brand(session: AsyncSession) -> int:
                 found[b.id] = "usertag"
             elif shop_names.get(b.id) in mentions:
                 found[b.id] = "mention"
+            elif b.id in article_brands.get(pk, set()):
+                found[b.id] = "article"
             elif tags[b.id] & hashtags:
                 found[b.id] = "hashtag"
         rows_out += [{"media_pk": pk, "brand_id": bid, "reason": r} for bid, r in found.items()]

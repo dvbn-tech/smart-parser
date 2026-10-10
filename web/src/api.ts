@@ -114,11 +114,29 @@ export interface Overview {
   parser: ParserSummary;
 }
 
+export interface PendingAccount {
+  task_id: number;
+  username: string;
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  run_after: string;
+  role: string;
+  person_name: string | null;
+  curator: string | null;
+  link_type: string | null;
+  is_own_creator: boolean;
+}
+
 export interface Brand {
   id: number;
   name: string;
   is_own: boolean;
   hashtags: string[];
+  username_masks?: string[];
+  domains?: string[];
+  pending?: number;
+  pending_shop?: string | null;
   spike_min_views: number;
   rocket_views: number;
   shop_user_pk: number | null;

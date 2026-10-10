@@ -11,8 +11,10 @@ from parser.signals.extract import (
     Signal,
     extract_hashtags,
     extract_mentions,
+    extract_promo_codes,
     extract_signals,
     extract_wb_articles,
+    extract_ww_codes,
 )
 
 
@@ -46,7 +48,8 @@ def test_mentions() -> None:
         ),
         ("art 55512345", {"55512345": KEYWORD_CONFIDENCE}),
         ("№ 7654321 на WB", {"7654321": KEYWORD_CONFIDENCE}),
-        ("#WW318221", {"318221": BRAND_HASHTAG_CONFIDENCE}),
+        ("#AB318221", {"318221": BRAND_HASHTAG_CONFIDENCE}),
+        ("#WW318221", {}),  # WW — подменный артикул, не номенклатура WB
         ("смотри 412683058 на вб", {"412683058": BARE_NUMBER_CONFIDENCE}),
         ("арт 12345", {}),  # меньше 6 цифр
         ("арт 1234567890123", {}),  # больше 12 цифр
@@ -95,3 +98,32 @@ def test_structural_signals() -> None:
         ("sponsor", "40"),
     }
     assert all(isinstance(s, Signal) for s in extract_signals(media))
+
+
+@pytest.mark.parametrize(
+    ("caption", "expected"),
+    [
+        ("#WW1070270 и ещё WW336590", ["WW1070270", "WW336590"]),
+        ("-#ww846992", ["WW846992"]),
+        ("WWW123456 aWW123456", []),
+        ("WW12", []),
+    ],
+)
+def test_ww_codes(caption: str, expected: list[str]) -> None:
+    assert extract_ww_codes(caption) == expected
+
+
+@pytest.mark.parametrize(
+    ("caption", "expected"),
+    [
+        ("(сайт в описании) по промо ilera15 -15% вообще на всё", ["ILERA15"]),
+        ("(секретный промокод от меня #SVSTH2D7ED65 )", ["SVSTH2D7ED65"]),
+        ("Промокод: LINE10 на всё", ["LINE10"]),
+        ("promo code anna20", ["ANNA20"]),
+        ("промокод 12345", []),  # без букв — не код
+        ("промо на WB #WW123456", []),  # WW-артикул — не промокод
+        ("просто текст", []),
+    ],
+)
+def test_promo_codes(caption: str, expected: list[str]) -> None:
+    assert extract_promo_codes(caption) == expected

@@ -71,9 +71,22 @@ export default function BrandsPage() {
             rowKey={(b) => b.id}
             columns={[
               { key: "name", label: "Бренд", sort: (b) => b.name, render: (b) => <span className="row" style={{ gap: 8 }}><Link to={`/brands/${b.id}`} style={{ fontWeight: 600 }}>{b.name}</Link>{b.is_own && <span className="tag own">наш</span>}</span> },
-              { key: "shop", label: "Официальный аккаунт", render: (b) => (b.shop_username ? <Link to={`/accounts/${b.shop_user_pk}`}>@{b.shop_username}</Link> : <span className="muted">не указан</span>) },
+              {
+                key: "shop",
+                label: "Официальный аккаунт",
+                render: (b) =>
+                  b.shop_username ? (
+                    <Link to={`/accounts/${b.shop_user_pk}`}>@{b.shop_username}</Link>
+                  ) : b.pending_shop ? (
+                    <span className="ink2">@{b.pending_shop} <span className="tag warn">ждёт сбора</span></span>
+                  ) : (
+                    <span className="muted">не указан</span>
+                  ),
+              },
               { key: "tags", label: "Хэштеги", render: (b) => <span className="ink2">{b.hashtags.map((t) => `#${t}`).join(" ") || "—"}</span> },
               { key: "creators", label: "Креаторов", right: true, sort: (b) => b.creators ?? 0, render: (b) => fmtInt(b.creators) },
+              { key: "pending", label: "Ждут сбора", right: true, title: "аккаунты из списка, по которым ещё не собран профиль", sort: (b) => b.pending ?? 0, render: (b) => (b.pending ? <span className="tag warn">{b.pending}</span> : <span className="muted">0</span>) },
+              { key: "masks", label: "Маски ников", render: (b) => <span className="ink2 small">{(b.username_masks ?? []).join("  ") || "—"}</span> },
               { key: "cand", label: "Кандидатов", right: true, sort: (b) => b.candidates ?? 0, render: (b) => (b.candidates ? <Link to={`/candidates?brand=${b.id}`}>{b.candidates}</Link> : <span className="muted">0</span>) },
               { key: "thr", label: "Порог всплеска", right: true, render: (b) => `${fmtInt(b.spike_min_views)} просм.` },
             ]}

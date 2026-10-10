@@ -6,8 +6,10 @@
 """
 
 import asyncio
+import random
 import time
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,6 +37,36 @@ HEADERS = {
 REELS_PAGE_SIZE = 12
 
 
+class _Pacer:
+    """Темп на весь процесс, а не на одну задачу (техспека §6): пауза между запросами
+    и не больше global_requests_per_hour в скользящий час. Задачи воркера идут по
+    очереди, поэтому одного замка на процесс достаточно."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+        self._sent: deque[float] = deque()
+
+    async def wait(self, settings: Settings) -> None:
+        await self._lock.acquire()
+        now = time.monotonic()
+        pause = settings.min_pause_between_requests_s - (now - self._last)
+        while self._sent and now - self._sent[0] > 3600:
+            self._sent.popleft()
+        if len(self._sent) >= settings.global_requests_per_hour:
+            pause = max(pause, 3600 - (now - self._sent[0]))
+        if pause > 0:
+            await asyncio.sleep(pause * random.uniform(1.0, 1.25))
+        self._sent.append(time.monotonic())
+
+    def done(self) -> None:
+        self._last = time.monotonic()
+        self._lock.release()
+
+
+_PACER = _Pacer()
+
+
 class WebSource:
     name = "web"
 
@@ -46,8 +78,6 @@ class WebSource:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._settings = settings
-        self._last_request_at = 0.0
-        self._lock = asyncio.Lock()
         proxy = None
         if settings.proxy_url:
             # sticky-сессия: одна задача — один IP на все её страницы
@@ -70,17 +100,12 @@ class WebSource:
         await self.aclose()
 
     async def _request(self, kind: str, method: str, path: str, **kwargs: Any) -> RawPage:
-        async with self._lock:
-            wait = self._settings.min_pause_between_requests_s - (
-                time.monotonic() - self._last_request_at
-            )
-            if wait > 0:
-                await asyncio.sleep(wait)
-            started = time.monotonic()
-            try:
-                resp = await self._client.request(method, f"{BASE}{path}", **kwargs)
-            finally:
-                self._last_request_at = time.monotonic()
+        await _PACER.wait(self._settings)
+        started = time.monotonic()
+        try:
+            resp = await self._client.request(method, f"{BASE}{path}", **kwargs)
+        finally:
+            _PACER.done()
         return RawPage(
             request_kind=kind,
             source=self.name,

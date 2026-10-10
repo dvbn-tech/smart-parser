@@ -144,3 +144,47 @@ def test_hidden_returns_only_on_new_strong_signal() -> None:
 def test_frequent_collab_is_ambassador() -> None:
     ev = [Evidence("collab", 1, "B", 50), Evidence("collab", 2, "B", 50)]
     assert link_type(ev) == "ambassador"
+
+
+FIFTEEN = BrandRef(
+    name="15.wear",
+    account_pks=frozenset({1500}),
+    account_usernames=frozenset({"15.wear"}),
+    hashtags=frozenset(),
+    ww_codes=frozenset({"WW336590"}),
+    username_masks=("*onefive*", "*one_five*", "*1five*"),
+    domains=frozenset({"15wear.ru"}),
+)
+
+
+def test_username_mask() -> None:
+    ev = collect_evidence(FIFTEEN, profile(username="lera_onefive"), [], W)
+    assert [(e.kind, e.value, e.weight) for e in ev] == [("username_mask", "*onefive*", 20)]
+    assert collect_evidence(FIFTEEN, profile(username="pamela"), [], W) == []
+
+
+def test_bio_link_and_ambassador_words() -> None:
+    p = profile(username="anna", bio="Амбассадор бренда @15.wear 💛")
+    kinds = {e.kind: e.weight for e in collect_evidence(FIFTEEN, p, [], W)}
+    assert kinds == {"bio_link": 40, "ambassador_bio": 20}
+    assert link_type(collect_evidence(FIFTEEN, p, [], W)) == "ambassador"
+
+
+def test_brand_site_in_bio_links() -> None:
+    p = profile(username="anna").model_copy(
+        update={"bio_links": ["https://15wear.ru/?utm_source=ig"]}
+    )
+    assert [e.kind for e in collect_evidence(FIFTEEN, p, [], W)] == ["bio_link"]
+
+
+def test_ambassador_word_alone_is_not_evidence() -> None:
+    assert collect_evidence(FIFTEEN, profile(bio="амбассадор спорта"), [], W) == []
+
+
+def test_ww_code_of_brand_counts_like_article() -> None:
+    medias = [media(i, caption="#WW336590 размер S") for i in range(4)] + [
+        media(9, caption="арт. 847963328")
+    ]
+    ev = collect_evidence(FIFTEEN, None, medias, W)
+    assert {e.kind for e in ev} == {"ww_code"}
+    assert score(ev, W) == Decimal("0.600")  # не больше 2 роликов с артикулами

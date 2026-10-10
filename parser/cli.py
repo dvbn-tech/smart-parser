@@ -31,12 +31,28 @@ def poc(
 
 
 @app.command("seed-demo")
-def seed_demo() -> None:
+def seed_demo(
+    force: Annotated[bool, typer.Option(help="стереть и реальные данные")] = False,
+) -> None:
     """Заполнить базу демо-данными (стирает текущие данные!) и пересчитать всплески."""
+    from sqlalchemy import text
+
     from parser.demo import seed_demo as seed
 
     async def run() -> None:
         async with session_scope() as session:
+            real = await session.scalar(
+                text("SELECT count(*) FROM account WHERE username NOT LIKE 'demo\\_%'")
+            )
+            queued = await session.scalar(
+                text("SELECT count(*) FROM scrape_task WHERE username IS NOT NULL")
+            )
+            if (real or queued) and not force:
+                typer.echo(
+                    f"В базе реальные данные ({real} аккаунтов, {queued} задач по никам). "
+                    "Демо их сотрёт — запустите с --force, если это точно нужно."
+                )
+                raise typer.Exit(1)
             typer.echo(await seed(session))
             typer.echo(await recompute_all(session))
 
@@ -58,6 +74,7 @@ def recompute() -> None:
 def work(
     once: Annotated[bool, typer.Option(help="выйти, когда очередь опустеет")] = False,
     max_tasks: Annotated[int | None, typer.Option(help="выполнить не больше N задач")] = None,
+    types: Annotated[str | None, typer.Option(help="только эти типы задач, через запятую")] = None,
 ) -> None:
     """Воркер: выполняет задачи из очереди (запросы к Instagram через WebSource)."""
     from contextlib import asynccontextmanager
@@ -76,7 +93,10 @@ def work(
     async def run() -> None:
         raw = RawStore(settings)
         await raw.ensure_bucket()
-        for r in await run_work(settings, source, raw, once=once, max_tasks=max_tasks):
+        type_list = [t.strip() for t in types.split(",")] if types else None
+        for r in await run_work(
+            settings, source, raw, once=once, max_tasks=max_tasks, types=type_list
+        ):
             typer.echo(r)
 
     asyncio.run(run())
@@ -92,6 +112,62 @@ def plan_cmd(slot: Annotated[str, typer.Argument(help="night | day | tagged")]) 
     async def run() -> None:
         async with session_scope() as session:
             typer.echo(await plan(session, slot, datetime.now(UTC)))
+
+    asyncio.run(run())
+
+
+@app.command("import-lists")
+def import_lists(
+    path: Annotated[Path, typer.Argument(help="таблица заказчика .xlsx")],
+    dry_run: Annotated[bool, typer.Option(help="только отчёт, без записи")] = False,
+    report: Annotated[Path, typer.Option(help="куда записать отчёт")] = Path(
+        "docs/import_report.md"
+    ),
+    replace_demo: Annotated[bool, typer.Option(help="сначала убрать демо-данные")] = False,
+) -> None:
+    """Импорт брендов, креаторов, масок ников и артикулов из таблицы заказчика."""
+    from sqlalchemy import text
+
+    from parser.importers.customer_xlsx import apply_plan, plan_summary, read_workbook
+
+    plan = read_workbook(path)
+    summary = plan_summary(plan)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(summary)
+    typer.echo(summary)
+    if dry_run:
+        return
+
+    async def run() -> None:
+        async with session_scope() as session:
+            demo = await session.scalar(
+                text("SELECT count(*) FROM account WHERE username LIKE 'demo\\_%'")
+            )
+            if demo and not replace_demo:
+                typer.echo(
+                    f"В базе {demo} демо-аккаунтов. Запустите с --replace-demo, чтобы убрать их перед импортом."
+                )
+                raise typer.Exit(1)
+            if demo:
+                real = await session.scalar(
+                    text("SELECT count(*) FROM account WHERE username NOT LIKE 'demo\\_%'")
+                )
+                if real:
+                    typer.echo(
+                        "В базе вперемешку демо и реальные данные — убирать автоматически не будем."
+                    )
+                    raise typer.Exit(1)
+                await session.execute(
+                    text(
+                        "TRUNCATE metric_snapshot, metric_quarantine, media_signal, media_brand, media_stats,"
+                        " media_daily_views, account_stats, media, account_snapshot, account_username_history,"
+                        " brand_article, brand_account, brand, account, scrape_task, raw_response,"
+                        " shape_fingerprint RESTART IDENTITY CASCADE"
+                    )
+                )
+                await session.commit()
+                typer.echo("Демо-данные удалены.")
+            typer.echo(await apply_plan(session, plan))
 
     asyncio.run(run())
 

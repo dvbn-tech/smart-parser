@@ -90,7 +90,7 @@ async def test_media_snapshots_signals_and_quarantine(session: AsyncSession) -> 
     ]
     assert await session.scalar(select(func.count()).select_from(MetricQuarantine)) == 1
     kinds = set((await session.execute(select(MediaSignal.kind, MediaSignal.value))).all())
-    assert ("wb_article", "318221") in kinds and ("mention", "waistline_shop") in kinds
+    assert ("ww_code", "WW318221") in kinds and ("mention", "waistline_shop") in kinds
 
 
 async def test_enqueue_is_idempotent(session: AsyncSession) -> None:

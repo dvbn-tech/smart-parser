@@ -17,6 +17,9 @@ class DiscoveryWeights(BaseSettings):
     wb_article_max_media: int = 2
     usertag: int = 25
     brand_name_in_profile: int = 20  # название бренда в нике или био
+    username_mask: int = 20  # ник по маске бренда: «*.base», «*_mela»
+    bio_link: int = 40  # ссылка на сайт или @аккаунт бренда в шапке профиля
+    ambassador_bio: int = 20  # «амбассадор / креатор / модель» в био рядом с брендом
     hashtag: int = 15
 
 

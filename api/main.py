@@ -164,6 +164,8 @@ class BrandIn(BaseModel):
 
 
 class BrandPatch(BaseModel):
+    username_masks: list[str] | None = None
+    domains: list[str] | None = None
     name: str | None = None
     is_own: bool | None = None
     instagram: str | None = None
@@ -231,7 +233,14 @@ async def list_brands(session: Db) -> list[dict[str, Any]]:
                 """
                 SELECT b.*, a.username AS shop_username,
                        count(ba.*) FILTER (WHERE ba.role = 'creator' AND ba.status = 'tracked') AS creators,
-                       count(ba.*) FILTER (WHERE ba.status = 'candidate') AS candidates
+                       count(ba.*) FILTER (WHERE ba.status = 'candidate') AS candidates,
+                       (SELECT count(*) FROM scrape_task t
+                         WHERE t.type = 'profile' AND t.status <> 'succeeded'
+                           AND t.payload->'link'->>'brand_id' = b.id::text) AS pending,
+                       (SELECT username FROM scrape_task t
+                         WHERE t.type = 'profile' AND t.status <> 'succeeded'
+                           AND t.payload->'link'->>'brand_id' = b.id::text
+                           AND t.payload->'link'->>'role' = 'shop' LIMIT 1) AS pending_shop
                   FROM brand b
                   LEFT JOIN account a ON a.user_pk = b.shop_user_pk
                   LEFT JOIN brand_account ba ON ba.brand_id = b.id
@@ -272,6 +281,9 @@ async def patch_brand(brand_id: int, body: BrandPatch, session: Db) -> dict[str,
     instagram = data.pop("instagram", None)
     if "hashtags" in data:
         data["hashtags"] = _clean_tags(data["hashtags"])
+    for key in ("username_masks", "domains"):
+        if key in data:
+            data[key] = sorted({v.strip().lower() for v in data[key] if v.strip()})
     for k, v in data.items():
         setattr(brand, k, v)
     shop = await _attach_account(session, brand_id, instagram, role="shop") if instagram else None
@@ -364,7 +376,26 @@ async def brand_detail(brand_id: int, session: Db) -> dict[str, Any]:
     )
     for c in creators:
         c.pop("computed_at", None)
-    return {"brand": dict(brand), "creators": creators}
+    pending = _rows(
+        await session.execute(
+            text(
+                """
+                SELECT t.id AS task_id, t.username, t.status, t.attempts, t.last_error, t.run_after,
+                       t.payload->'link'->>'role' AS role,
+                       t.payload->'link'->>'person_name' AS person_name,
+                       t.payload->'link'->>'curator' AS curator,
+                       t.payload->'link'->>'link_type' AS link_type,
+                       (t.payload->'link'->>'is_own_creator')::boolean AS is_own_creator
+                  FROM scrape_task t
+                 WHERE t.type = 'profile' AND t.status <> 'succeeded'
+                   AND t.payload->'link'->>'brand_id' = :b
+                 ORDER BY t.payload->'link'->>'role' DESC, t.username
+                """
+            ),
+            {"b": str(brand_id)},
+        )
+    )
+    return {"brand": dict(brand), "creators": creators, "pending": pending}
 
 
 class CreatorIn(BaseModel):

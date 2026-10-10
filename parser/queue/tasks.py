@@ -122,6 +122,7 @@ _CLAIM = text(
          WHERE c.status IN ('pending', 'retry', 'deferred')
            AND c.run_after <= now()
            AND c.priority >= :min_priority
+           AND (CAST(:types AS text[]) IS NULL OR c.type = ANY(CAST(:types AS text[])))
            AND (c.user_pk IS NULL OR (
                 NOT EXISTS (
                     SELECT 1 FROM scrape_task r
@@ -136,12 +137,15 @@ _CLAIM = text(
 )
 
 
-async def claim(session: AsyncSession, *, low_priority_slot: bool = False) -> ScrapeTask | None:
+async def claim(
+    session: AsyncSession, *, low_priority_slot: bool = False, types: list[str] | None = None
+) -> ScrapeTask | None:
     """Взять следующую задачу. Слоты низшего приоритета берут только P2–P3."""
     min_priority = Priority.P2 if low_priority_slot else Priority.P0
     task_id = (
         await session.execute(
-            _CLAIM, {"lease_s": LEASE.total_seconds(), "min_priority": int(min_priority)}
+            _CLAIM,
+            {"lease_s": LEASE.total_seconds(), "min_priority": int(min_priority), "types": types},
         )
     ).scalar_one_or_none()
     if task_id is None:

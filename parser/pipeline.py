@@ -23,6 +23,7 @@ from core.db.models import (
     Account,
     Brand,
     BrandAccount,
+    BrandArticle,
     Media,
     RawResponse,
     ScrapeTask,
@@ -281,6 +282,7 @@ class Runner:
             await self.s.execute(
                 update(Brand).where(Brand.id == brand_id).values(shop_user_pk=profile.user_pk)
             )
+        extra = {k: link.get(k) for k in ("person_name", "curator", "link_type")}
         await self.s.execute(
             insert(BrandAccount)
             .values(
@@ -293,13 +295,15 @@ class Runner:
                 evidence=[],
                 all_posts_count_for_brand=role == "creator",
                 first_seen=snapshot_day(self.now()),
+                **extra,
             )
             .on_conflict_do_update(
                 index_elements=["brand_id", "user_pk"],
-                set_={"status": "tracked", "role": role},
+                set_={"status": "tracked", "role": role, **extra},
             )
         )
-        await q.enqueue(self.s, q.TaskType.BACKFILL, user_pk=profile.user_pk, window="initial")
+        if not profile.is_private:
+            await q.enqueue(self.s, q.TaskType.BACKFILL, user_pk=profile.user_pk, window="initial")
 
     # --- лента ------------------------------------------------------------------------
 
@@ -447,11 +451,21 @@ class Runner:
         if pks:
             rows = await self.s.execute(select(Account.username).where(Account.user_pk.in_(pks)))
             names = {r[0] for r in rows}
+        articles = await self.s.execute(
+            select(BrandArticle.kind, BrandArticle.value).where(BrandArticle.brand_id == brand_id)
+        )
+        by_kind: dict[str, set[str]] = {"wb": set(), "ww": set()}
+        for kind, value in articles:
+            by_kind.setdefault(kind, set()).add(value)
         return BrandRef(
             name=brand.name,
             account_pks=frozenset(pks),
             account_usernames=frozenset(names),
             hashtags=frozenset(brand.hashtags),
+            wb_articles=frozenset(by_kind["wb"]),
+            ww_codes=frozenset(by_kind["ww"]),
+            username_masks=tuple(brand.username_masks or ()),
+            domains=frozenset(brand.domains or ()),
         )
 
     async def candidate_probe(self, task: ScrapeTask) -> None:

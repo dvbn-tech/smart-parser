@@ -44,7 +44,10 @@ class Brand(Base):
     )
     wb_seller_id: Mapped[str | None] = mapped_column(Text)
     hashtags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # Маски ников креаторов бренда, glob: «*.base», «*_mela», «*onefive*»
     username_masks: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
+    # Домены сайта бренда: ссылка на них в шапке профиля — сигнал связи
+    domains: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
     spike_min_views: Mapped[int] = mapped_column(Integer, server_default="50000")
     rocket_views: Mapped[int] = mapped_column(Integer, server_default="500000")
 
@@ -119,6 +122,22 @@ class BrandAccount(Base):
     first_seen: Mapped[date | None] = mapped_column(Date)
     last_seen: Mapped[date | None] = mapped_column(Date)
     hidden_at: Mapped[datetime | None]
+    # Из списка заказчика: кто ведёт креатора и как его зовут (только для наших креаторов)
+    person_name: Mapped[str | None] = mapped_column(Text)
+    curator: Mapped[str | None] = mapped_column(Text)
+
+
+class BrandArticle(Base):
+    """Известные артикулы бренда: WB (номенклатура) и подменные WW-коды."""
+
+    __tablename__ = "brand_article"
+
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brand.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)  # wb | ww
+    value: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (Index("brand_article_value_idx", "kind", "value"),)
 
 
 # --- Ролики и метрики ------------------------------------------------------------------

@@ -1,15 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type Brand, type CreatorRow, type MediaRow } from "../api";
+import { api, type Brand, type CreatorRow, type MediaRow, type PendingAccount } from "../api";
 import { Empty, ErrorBox, Loading, MediaCard, SortTable, toast } from "../components/ui";
-import { LINK_LABEL, fmtAgo, fmtCompact, fmtInt, fmtRatio } from "../format";
+import { LINK_LABEL, STATUS_LABEL, fmtAgo, fmtCompact, fmtInt, fmtRatio } from "../format";
 
 export default function BrandPage() {
   const id = Number(useParams().id);
   const qc = useQueryClient();
   const nav = useNavigate();
-  const q = useQuery({ queryKey: ["brand", id], queryFn: () => api.get<{ brand: Brand; creators: CreatorRow[] }>(`/brands/${id}`) });
+  const q = useQuery({ queryKey: ["brand", id], queryFn: () => api.get<{ brand: Brand; creators: CreatorRow[]; pending: PendingAccount[] }>(`/brands/${id}`) });
   const top = useQuery({
     queryKey: ["anomalies", "brand", id],
     queryFn: () => api.get<{ items: MediaRow[] }>(`/anomalies?days=90&brand_id=${id}&limit=8`),
@@ -37,7 +37,7 @@ export default function BrandPage() {
   if (q.isLoading) return <Loading h={400} />;
   if (q.error) return <ErrorBox error={q.error} />;
   if (!q.data) return null;
-  const { brand, creators } = q.data;
+  const { brand, creators, pending } = q.data;
   const people = creators.filter((c) => c.role !== "shop");
   const shop = creators.find((c) => c.role === "shop");
 
@@ -138,6 +138,37 @@ export default function BrandPage() {
             )}
           </div>
 
+          {pending.length > 0 && (
+            <div className="card flush">
+              <div className="card-head">
+                <h2>Ожидают первого сбора ({pending.length})</h2>
+                <span className="hint">аккаунты из списка заказчика: после сбора профиля появятся в рейтинге и загрузится вся история роликов</span>
+              </div>
+              <div className="table-wrap">
+                <table className="compact">
+                  <thead>
+                    <tr><th>Аккаунт</th><th>Роль</th><th>ФИ</th><th>Куратор</th><th>Статус</th><th>Последняя ошибка</th></tr>
+                  </thead>
+                  <tbody>
+                    {pending.map((p) => (
+                      <tr key={p.task_id}>
+                        <td>
+                          <a href={`https://www.instagram.com/${p.username}/`} target="_blank" rel="noreferrer">@{p.username}</a>
+                          {p.is_own_creator && <span className="tag own" style={{ marginLeft: 6 }}>наш</span>}
+                        </td>
+                        <td className="ink2">{p.role === "shop" ? "официальный аккаунт" : p.link_type === "reviewer" ? "обзорный аккаунт" : p.link_type === "public" ? "паблик" : "креатор"}</td>
+                        <td className="ink2">{p.person_name ?? "—"}</td>
+                        <td className="ink2">{p.curator ?? "—"}</td>
+                        <td><span className={`tag${p.status === "failed" ? " crit" : p.status === "deferred" || p.status === "retry" ? " warn" : ""}`}>{STATUS_LABEL[p.status] ?? p.status}</span></td>
+                        <td className="small" style={{ color: "var(--bad)" }}>{p.last_error ?? ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <h2>Сильнейшие всплески за 90 дней</h2>
             {top.data && top.data.items.length > 0 ? (
@@ -154,7 +185,7 @@ export default function BrandPage() {
 
 function BrandSettings({ brand, onDeleted }: { brand: Brand; onDeleted: () => void }) {
   const qc = useQueryClient();
-  const [f, setF] = useState({ name: brand.name, hashtags: brand.hashtags.join(" "), instagram: "", spike_min_views: brand.spike_min_views, rocket_views: brand.rocket_views, is_own: brand.is_own });
+  const [f, setF] = useState({ name: brand.name, hashtags: brand.hashtags.join(" "), instagram: "", spike_min_views: brand.spike_min_views, rocket_views: brand.rocket_views, is_own: brand.is_own, masks: (brand.username_masks ?? []).join(" "), domains: (brand.domains ?? []).join(" ") });
   useEffect(() => {
     setF((s) => ({ ...s, name: brand.name, hashtags: brand.hashtags.join(" ") }));
   }, [brand.name, brand.hashtags]);
@@ -166,6 +197,8 @@ function BrandSettings({ brand, onDeleted }: { brand: Brand; onDeleted: () => vo
         spike_min_views: Number(f.spike_min_views),
         rocket_views: Number(f.rocket_views),
         is_own: f.is_own,
+        username_masks: f.masks.split(/\s+/).filter(Boolean),
+        domains: f.domains.split(/\s+/).filter(Boolean),
         ...(f.instagram.trim() ? { instagram: f.instagram.trim() } : {}),
       }),
     onSuccess: () => {
@@ -188,6 +221,10 @@ function BrandSettings({ brand, onDeleted }: { brand: Brand; onDeleted: () => vo
         <label className="field">Сменить официальный аккаунт<input value={f.instagram} onChange={(e) => setF({ ...f, instagram: e.target.value })} placeholder={brand.shop_username ? `сейчас @${brand.shop_username}` : "ссылка или @ник"} /></label>
       </div>
       <label className="field">Хэштеги бренда (через пробел)<input value={f.hashtags} onChange={(e) => setF({ ...f, hashtags: e.target.value })} /></label>
+      <label className="field">Маски ников креаторов (через пробел)<input value={f.masks} onChange={(e) => setF({ ...f, masks: e.target.value })} placeholder="*.base *_mela *onefive*" /></label>
+      <div className="hint">«*» — любые символы, «[._]» — точка или подчёркивание. Ник по маске даёт кандидату +20 к уверенности.</div>
+      <label className="field">Сайт бренда (домены через пробел)<input value={f.domains} onChange={(e) => setF({ ...f, domains: e.target.value })} placeholder="waistline.shop" /></label>
+      <div className="hint">Ссылка на сайт или @аккаунт бренда в шапке профиля даёт кандидату +40.</div>
       <div className="panel-form">
         <label className="field">Порог всплеска, просмотров<input type="number" min={0} value={f.spike_min_views} onChange={(e) => setF({ ...f, spike_min_views: Number(e.target.value) })} /></label>
         <label className="field">Порог «ракеты», просмотров<input type="number" min={0} value={f.rocket_views} onChange={(e) => setF({ ...f, rocket_views: Number(e.target.value) })} /></label>

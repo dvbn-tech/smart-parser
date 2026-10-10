@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
@@ -32,6 +33,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-aioboto3[s3]>=13.1",
+    "types-openpyxl>=3.1",
 ]
 
 [build-system]
@@ -71,4 +73,6 @@ source = ["core", "parser"]
 [tool.ruff.lint.per-file-ignores]
 "infra/migrations/versions/*" = ["E501"]
 "api/*.py" = ["E501"]  # SQL-запросы читаются лучше без переносов
+"parser/importers/*.py" = ["E501"]  # сообщения отчёта для заказчика
+"parser/cli.py" = ["E501"]
 "parser/demo.py" = ["B023"]  # замыкание snap() вызывается в той же итерации цикла
