@@ -7,6 +7,8 @@ from typing import Annotated
 import typer
 
 from core.config import get_settings
+from core.db.session import session_scope
+from core.metrics.recompute import recompute_all
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -26,6 +28,30 @@ def poc(
         run_poc(get_settings(), usernames, out, max_pages=max_pages, brand_query=brand_query)
     )
     typer.echo(report.read_text())
+
+
+@app.command("seed-demo")
+def seed_demo() -> None:
+    """Заполнить базу демо-данными (стирает текущие данные!) и пересчитать всплески."""
+    from parser.demo import seed_demo as seed
+
+    async def run() -> None:
+        async with session_scope() as session:
+            typer.echo(await seed(session))
+            typer.echo(await recompute_all(session))
+
+    asyncio.run(run())
+
+
+@app.command()
+def recompute() -> None:
+    """Ночной пересчёт: связи ролик–бренд и всплески."""
+
+    async def run() -> None:
+        async with session_scope() as session:
+            typer.echo(await recompute_all(session))
+
+    asyncio.run(run())
 
 
 def normalize_username(value: str) -> str | None:

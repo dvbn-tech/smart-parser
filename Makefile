@@ -1,4 +1,4 @@
-.PHONY: up down migrate check test
+.PHONY: up down migrate check test api web demo
 
 up:
 	docker compose -f infra/docker-compose.yml up -d
@@ -17,3 +17,12 @@ check:
 
 test:
 	uv run pytest --cov --cov-report=term-missing
+
+api:
+	uv run uvicorn api.main:app --port 8000 --reload
+
+web:
+	npm --prefix web run dev
+
+demo:
+	uv run smart-parser seed-demo

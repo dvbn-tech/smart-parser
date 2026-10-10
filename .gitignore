@@ -8,3 +8,6 @@ __pycache__/
 .coverage
 htmlcov/
 poc_out/
+node_modules/
+web/dist/
+*.tsbuildinfo
