@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: parser
+          POSTGRES_PASSWORD: parser
+          POSTGRES_DB: parser
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U parser" --health-interval 5s --health-retries 10
+    env:
+      SP_DATABASE_URL: postgresql+asyncpg://parser:parser@127.0.0.1:5432/parser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run alembic -c infra/alembic.ini upgrade head
+      - run: uv run pytest --cov --cov-report=term-missing

@@ -1,0 +1,31 @@
+name: smart-parser
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: parser
+      POSTGRES_PASSWORD: parser
+      POSTGRES_DB: parser
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parser"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+
+  # Локальный S3-совместимый сервер (образы MinIO больше не публикуются в Docker Hub).
+  # Ключи доступа в dev не проверяются; бакет создаёт приложение.
+  s3:
+    image: chrislusf/seaweedfs:3.80
+    command: server -s3 -s3.port=9000 -dir=/data
+    ports: ["127.0.0.1:9000:9000"]
+    volumes: [s3data:/data]
+
+volumes:
+  pgdata:
+  s3data:
