@@ -62,6 +62,15 @@ class Account(Base):
     is_verified: Mapped[bool] = mapped_column(Boolean)
     is_business: Mapped[bool] = mapped_column(Boolean)
     avatar_key: Mapped[str | None] = mapped_column(Text)
+    pronouns: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    bio_links: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    is_professional: Mapped[bool | None] = mapped_column(Boolean)
+    business_category: Mapped[str | None] = mapped_column(Text)
+    highlight_reel_count: Mapped[int | None] = mapped_column(Integer)
+    has_clips: Mapped[bool | None] = mapped_column(Boolean)
+    hide_like_and_view_counts: Mapped[bool | None] = mapped_column(Boolean)
+    fbid: Mapped[str | None] = mapped_column(Text)
+    transparency_label: Mapped[str | None] = mapped_column(Text)
     # active | private | not_found | deleted | paused
     status: Mapped[str] = mapped_column(Text, server_default="active")
     not_found_since: Mapped[datetime | None]
@@ -133,7 +142,23 @@ class Media(Base):
     sponsor_user_pks: Mapped[list[int] | None] = mapped_column(ARRAY(BigInteger))
     audio_id: Mapped[str | None] = mapped_column(Text)
     audio_title: Mapped[str | None] = mapped_column(Text)
+    audio_artist: Mapped[str | None] = mapped_column(Text)
+    audio_type: Mapped[str | None] = mapped_column(Text)  # original_sounds | licensed_music | ...
     is_original_audio: Mapped[bool | None] = mapped_column(Boolean)
+    has_audio: Mapped[bool | None] = mapped_column(Boolean)
+    caption_is_edited: Mapped[bool | None] = mapped_column(Boolean)
+    accessibility_caption: Mapped[str | None] = mapped_column(Text)
+    location_pk: Mapped[int | None] = mapped_column(BigInteger)
+    location_name: Mapped[str | None] = mapped_column(Text)
+    location_lat: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    location_lng: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    remix_of_media_pk: Mapped[int | None] = mapped_column(BigInteger)
+    is_shared_to_fb: Mapped[bool | None] = mapped_column(Boolean)
+    carousel_media_count: Mapped[int | None] = mapped_column(Integer)
+    commerciality_status: Mapped[str | None] = mapped_column(Text)
+    is_in_profile_grid: Mapped[bool | None] = mapped_column(Boolean)
     # Ссылка на видео протухает; хранится для будущей разметки (Ф-23)
     video_url: Mapped[str | None] = mapped_column(Text)
     video_url_seen_at: Mapped[datetime | None]
@@ -157,6 +182,9 @@ class MetricSnapshot(Base):
     like_count: Mapped[int | None] = mapped_column(BigInteger)
     comment_count: Mapped[int | None] = mapped_column(BigInteger)
     reshare_count: Mapped[int | None] = mapped_column(BigInteger)
+    video_view_count: Mapped[int | None] = mapped_column(BigInteger)  # старый счётчик GraphQL
+    fb_play_count: Mapped[int | None] = mapped_column(BigInteger)  # кросспостинг в Facebook
+    fb_like_count: Mapped[int | None] = mapped_column(BigInteger)
     likes_hidden: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     comments_disabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     flags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
@@ -177,6 +205,9 @@ class MetricQuarantine(Base):
     like_count: Mapped[int | None] = mapped_column(BigInteger)
     comment_count: Mapped[int | None] = mapped_column(BigInteger)
     reshare_count: Mapped[int | None] = mapped_column(BigInteger)
+    video_view_count: Mapped[int | None] = mapped_column(BigInteger)  # старый счётчик GraphQL
+    fb_play_count: Mapped[int | None] = mapped_column(BigInteger)  # кросспостинг в Facebook
+    fb_like_count: Mapped[int | None] = mapped_column(BigInteger)
     likes_hidden: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     comments_disabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     flags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default="{}")
@@ -224,6 +255,66 @@ class MediaStats(Base):
     is_early: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     is_rocket: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     er: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    likes: Mapped[int | None] = mapped_column(BigInteger)
+    comments: Mapped[int | None] = mapped_column(BigInteger)
+    reshares: Mapped[int | None] = mapped_column(BigInteger)
+    views_per_day: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Просмотры, набранные до начала наблюдения (ролик из истории): не распределяются по дням
+    views_before_observation: Mapped[int | None] = mapped_column(BigInteger)
+    computed_at: Mapped[datetime]
+
+
+class MediaDailyViews(Base):
+    """Прирост просмотров ролика по дням (техспека §9.1): основа «просмотров за период»."""
+
+    __tablename__ = "media_daily_views"
+
+    media_pk: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    views_increment: Mapped[int] = mapped_column(BigInteger)
+
+    __table_args__ = (Index("media_daily_views_date_idx", "date"),)
+
+
+class AccountStats(Base):
+    """Показатели креатора, пересчитываются каждую ночь (техспека §9.3)."""
+
+    __tablename__ = "account_stats"
+
+    user_pk: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    reels_total: Mapped[int] = mapped_column(Integer)
+    reels_7d: Mapped[int] = mapped_column(Integer)
+    reels_30d: Mapped[int] = mapped_column(Integer)
+    reels_90d: Mapped[int] = mapped_column(Integer)
+    posts_per_week_90d: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    avg_views_20: Mapped[int | None] = mapped_column(BigInteger)
+    median_views_20: Mapped[int | None] = mapped_column(BigInteger)
+    median_views_prev_20: Mapped[int | None] = mapped_column(BigInteger)
+    trend: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    p90_views: Mapped[int | None] = mapped_column(BigInteger)
+    max_views: Mapped[int | None] = mapped_column(BigInteger)
+    min_views_20: Mapped[int | None] = mapped_column(BigInteger)
+    total_views: Mapped[int | None] = mapped_column(BigInteger)
+    views_30d: Mapped[int | None] = mapped_column(BigInteger)  # Σ прироста за 30 дней
+    views_per_day_30d: Mapped[int | None] = mapped_column(BigInteger)
+    cv_views_20: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))  # разброс: σ / среднее
+    avg_likes_20: Mapped[int | None] = mapped_column(BigInteger)
+    avg_comments_20: Mapped[int | None] = mapped_column(BigInteger)
+    er_median_20: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    spikes_total: Mapped[int] = mapped_column(Integer)
+    spikes_90d: Mapped[int] = mapped_column(Integer)
+    viral_total: Mapped[int] = mapped_column(Integer)
+    hit_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    best_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    avg_duration_s: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    paid_share: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    original_audio_share: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    followers: Mapped[int | None] = mapped_column(BigInteger)
+    followers_delta_7d: Mapped[int | None] = mapped_column(BigInteger)
+    followers_delta_30d: Mapped[int | None] = mapped_column(BigInteger)
+    views_to_followers: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    first_reel_at: Mapped[datetime | None]
+    last_reel_at: Mapped[datetime | None]
     computed_at: Mapped[datetime]
 
 

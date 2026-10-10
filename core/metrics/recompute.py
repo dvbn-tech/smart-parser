@@ -1,4 +1,4 @@
-"""Ночной пересчёт (техспека §9): media_brand → media_stats.
+"""Ночной пересчёт (техспека §9): media_brand, media_stats, media_daily_views, account_stats.
 
 Полный пересчёт: при ~75 тыс. роликов и ~5 млн снимков укладывается в
 минуты. Инкрементальный режим (только ролики с новыми снимками) — следующий шаг.
@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import delete, select, text
@@ -16,7 +16,18 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
-from core.db.models import Account, Brand, BrandAccount, Media, MediaBrand, MediaStats
+from core.db.models import (
+    Account,
+    AccountStats,
+    Brand,
+    BrandAccount,
+    Media,
+    MediaBrand,
+    MediaDailyViews,
+    MediaStats,
+)
+from core.metrics.creators import ReelFacts, creator_stats
+from core.metrics.daily import daily_increments
 from core.metrics.spikes import MediaViews, compute_spike
 from parser.signals.extract import extract_hashtags, extract_mentions
 
@@ -25,16 +36,20 @@ from parser.signals.extract import extract_hashtags, extract_mentions
 class RecomputeResult:
     media: int
     media_brand: int
+    daily_rows: int
+    accounts: int
     seconds: float
 
 
 async def recompute_all(session: AsyncSession, now: datetime | None = None) -> RecomputeResult:
+    """Порядок из техспеки §9: media_brand → media_stats + media_daily_views → креаторы."""
     started = time.monotonic()
     now = now or datetime.now(UTC)
     links = await _media_brand(session)
-    stats = await _media_stats(session, now)
+    stats, daily = await _media_stats(session, now)
+    accounts = await _account_stats(session, now)
     await session.commit()
-    return RecomputeResult(stats, links, round(time.monotonic() - started, 2))
+    return RecomputeResult(stats, links, daily, accounts, round(time.monotonic() - started, 2))
 
 
 async def _media_brand(session: AsyncSession) -> int:
@@ -101,7 +116,8 @@ async def _media_brand(session: AsyncSession) -> int:
     return len(rows_out)
 
 
-async def _media_stats(session: AsyncSession, now: datetime) -> int:
+async def _media_stats(session: AsyncSession, now: datetime) -> tuple[int, int]:
+    """media_stats и media_daily_views. Возвращает (роликов, строк прироста)."""
     s = get_settings()
     media = (
         await session.execute(
@@ -127,11 +143,19 @@ async def _media_stats(session: AsyncSession, now: datetime) -> int:
         by_owner[owner].append(MediaViews(pk, taken_at, snaps.get(pk, {})))
 
     out: list[dict[str, object]] = []
+    daily_rows: list[dict[str, object]] = []
     for reels in by_owner.values():
         for m in reels:
             r = compute_spike(
                 m, reels, now=now, spike_min_views=s.spike_min_views, rocket_views=s.rocket_views
             )
+            daily = daily_increments(m.taken_at.date(), m.snapshots)
+            daily_rows += [
+                {"media_pk": m.media_pk, "date": d, "views_increment": v}
+                for d, v in daily.increments.items()
+            ]
+            likes, comments, reshares = latest.get(m.media_pk, (None, None, None))
+            age_days = max((now - m.taken_at).total_seconds() / 86400, 1)
             out.append(
                 {
                     "media_pk": m.media_pk,
@@ -145,12 +169,96 @@ async def _media_stats(session: AsyncSession, now: datetime) -> int:
                     "is_early": r.is_early,
                     "is_rocket": r.is_rocket,
                     "er": _er(r.views, latest.get(m.media_pk)),
+                    "likes": likes,
+                    "comments": comments,
+                    "reshares": reshares,
+                    "views_per_day": Decimal(r.views / age_days).quantize(Decimal("0.01"))
+                    if r.views is not None
+                    else None,
+                    "views_before_observation": daily.before_observation or None,
                     "computed_at": now,
                 }
             )
     await session.execute(delete(MediaStats))
-    for i in range(0, len(out), 3000):
-        await session.execute(insert(MediaStats).values(out[i : i + 3000]))
+    for i in range(0, len(out), 2000):
+        await session.execute(insert(MediaStats).values(out[i : i + 2000]))
+    await session.execute(delete(MediaDailyViews))
+    for i in range(0, len(daily_rows), 10000):
+        await session.execute(insert(MediaDailyViews).values(daily_rows[i : i + 10000]))
+    return len(out), len(daily_rows)
+
+
+async def _account_stats(session: AsyncSession, now: datetime) -> int:
+    rows = await session.execute(
+        text(
+            """
+            SELECT m.owner_user_pk, m.taken_at, s.views, s.likes, s.comments, s.er,
+                   s.spike_category, s.spike_ratio, m.duration_s, m.is_paid_partnership,
+                   m.is_original_audio
+              FROM media m JOIN media_stats s USING (media_pk)
+             WHERE m.product_type = 'clips' AND m.missing_since IS NULL
+            """
+        )
+    )
+    reels: dict[int, list[ReelFacts]] = defaultdict(list)
+    for owner, *facts in rows:
+        reels[owner].append(ReelFacts(*facts))
+
+    views_30d: dict[int, int] = dict(
+        (
+            await session.execute(
+                text(
+                    """
+                    SELECT m.owner_user_pk, sum(d.views_increment)::bigint
+                      FROM media_daily_views d JOIN media m USING (media_pk)
+                     WHERE d.date > :since GROUP BY 1
+                    """
+                ),
+                {"since": (now - timedelta(days=30)).date()},
+            )
+        ).tuples()
+    )
+    followers: dict[int, dict[int, int]] = defaultdict(dict)
+    snap_rows = await session.execute(
+        text(
+            """
+            SELECT DISTINCT ON (user_pk, bucket) user_pk, bucket, followers_count FROM (
+                SELECT user_pk, followers_count, snapshot_date,
+                       CASE WHEN snapshot_date >= :d0 THEN 0
+                            WHEN snapshot_date <= :d7 AND snapshot_date > :d14 THEN 7
+                            WHEN snapshot_date <= :d30 AND snapshot_date > :d45 THEN 30
+                       END AS bucket
+                  FROM account_snapshot) x
+             WHERE bucket IS NOT NULL
+             ORDER BY user_pk, bucket, snapshot_date DESC
+            """
+        ),
+        {
+            "d0": (now - timedelta(days=3)).date(),
+            "d7": (now - timedelta(days=7)).date(),
+            "d14": (now - timedelta(days=14)).date(),
+            "d30": (now - timedelta(days=30)).date(),
+            "d45": (now - timedelta(days=45)).date(),
+        },
+    )
+    for user_pk, bucket, count in snap_rows:
+        followers[user_pk][bucket] = count
+
+    out = []
+    for user_pk in set(reels) | set(followers):
+        f = followers.get(user_pk, {})
+        stats = creator_stats(
+            reels.get(user_pk, []),
+            now=now,
+            views_30d=views_30d.get(user_pk),
+            followers=f.get(0),
+            followers_7d_ago=f.get(7),
+            followers_30d_ago=f.get(30),
+        )
+        out.append({"user_pk": user_pk, **stats, "computed_at": now})
+    await session.execute(delete(AccountStats))
+    for i in range(0, len(out), 1000):
+        await session.execute(insert(AccountStats).values(out[i : i + 1000]))
     return len(out)
 
 

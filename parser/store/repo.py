@@ -20,6 +20,18 @@ from parser.parse.models import IgMedia, IgMetrics, IgProfile
 from parser.signals.extract import Signal
 from parser.validate.metrics import Action, PrevSnapshot, Verdict
 
+_PROFILE_EXTRA = (
+    "pronouns",
+    "bio_links",
+    "is_professional",
+    "business_category",
+    "highlight_reel_count",
+    "has_clips",
+    "hide_like_and_view_counts",
+    "fbid",
+    "transparency_label",
+)
+
 
 async def upsert_account(session: AsyncSession, p: IgProfile, now: datetime) -> bool:
     """Профиль по user_pk. Смена ника пишется в историю. Возвращает True, если ник сменился."""
@@ -49,6 +61,7 @@ async def upsert_account(session: AsyncSession, p: IgProfile, now: datetime) -> 
         "status": status,
         "not_found_since": None,
         "last_scraped_at": now,
+        **{k: getattr(p, k) for k in _PROFILE_EXTRA},
     }
     stmt = insert(Account).values(**values)
     await session.execute(
@@ -101,12 +114,34 @@ _MEDIA_MUTABLE = (
     "sponsor_user_pks",
     "audio_id",
     "audio_title",
+    "audio_artist",
+    "audio_type",
     "is_original_audio",
+    "has_audio",
+    "caption_is_edited",
+    "accessibility_caption",
+    "location_pk",
+    "location_name",
+    "location_lat",
+    "location_lng",
+    "width",
+    "height",
+    "remix_of_media_pk",
+    "is_shared_to_fb",
+    "carousel_media_count",
+    "commerciality_status",
+    "is_in_profile_grid",
 )
 
 
-async def upsert_media(session: AsyncSession, m: IgMedia, now: datetime) -> tuple[bool, bool]:
-    """Ролик по media_pk. Возвращает (новый ли ролик, изменилась ли подпись)."""
+async def upsert_media(
+    session: AsyncSession, m: IgMedia, now: datetime, *, partial: bool = False
+) -> tuple[bool, bool]:
+    """Ролик по media_pk. Возвращает (новый ли ролик, изменилась ли подпись).
+
+    partial=True — источник беднее ленты (блок постов в ответе профиля): пустые
+    поля не затирают уже известные значения.
+    """
     old_caption = (
         await session.execute(select(Media.caption).where(Media.media_pk == m.media_pk))
     ).first()
@@ -130,11 +165,14 @@ async def upsert_media(session: AsyncSession, m: IgMedia, now: datetime) -> tupl
     update_cols = [*_MEDIA_MUTABLE, "missing_since", "missing_passes", "shortcode"]
     if m.video_url:
         update_cols += ["video_url", "video_url_seen_at"]
-    await session.execute(
-        stmt.on_conflict_do_update(
-            index_elements=[Media.media_pk], set_={k: stmt.excluded[k] for k in update_cols}
-        )
-    )
+    set_: dict[str, Any] = {k: stmt.excluded[k] for k in update_cols}
+    if partial:
+        table = Media.__table__.c
+        set_ = {k: func.coalesce(stmt.excluded[k], table[k]) for k in _MEDIA_MUTABLE}
+        set_.update(missing_since=None, missing_passes=0)
+    await session.execute(stmt.on_conflict_do_update(index_elements=[Media.media_pk], set_=set_))
+    if partial and m.caption is None:
+        return is_new, False
     caption_changed = old_caption is None or old_caption[0] != m.caption
     return is_new, caption_changed
 
@@ -194,6 +232,9 @@ async def write_metrics(
         "like_count": x.like_count,
         "comment_count": x.comment_count,
         "reshare_count": x.reshare_count,
+        "video_view_count": x.video_view_count,
+        "fb_play_count": x.fb_play_count,
+        "fb_like_count": x.fb_like_count,
         "likes_hidden": x.likes_hidden,
         "comments_disabled": x.comments_disabled,
         "flags": verdict.flags,
@@ -211,3 +252,22 @@ async def write_metrics(
         )
     )
     return "written"
+
+
+async def ensure_account_stub(session: AsyncSession, user_pk: int, username: str | None) -> None:
+    """Заготовка аккаунта, о котором известен только user_pk (автор collab, отмеченный бренд).
+
+    Профиль не собирается, пока аккаунт не связан с брендом; ник временный.
+    """
+    await session.execute(
+        insert(Account)
+        .values(
+            user_pk=user_pk,
+            username=username or f"#{user_pk}",
+            is_private=False,
+            is_verified=False,
+            is_business=False,
+            status="active",
+        )
+        .on_conflict_do_nothing()
+    )

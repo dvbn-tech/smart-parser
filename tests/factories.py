@@ -78,3 +78,32 @@ class _Delete:
 
 _DELETE = _Delete()
 DELETE: Any = _DELETE
+
+
+def graphql_node(**overrides: Any) -> dict[str, Any]:
+    node: dict[str, Any] = {
+        "__typename": "GraphVideo",
+        "id": "3471298811234999",
+        "shortcode": "C9xGraphQL1",
+        "is_video": True,
+        "product_type": "clips",
+        "taken_at_timestamp": TAKEN_AT,
+        "owner": {"id": str(OWNER_PK)},
+        "edge_media_to_caption": {"edges": [{"node": {"text": "Образ дня #waistline"}}]},
+        "edge_liked_by": {"count": 5100},
+        "edge_media_to_comment": {"count": 77},
+        "video_view_count": 88000,
+        "dimensions": {"width": 1080, "height": 1920},
+        "display_url": "https://cdn.example/g.jpg",
+        "location": {"id": "213385402", "name": "Москва"},
+        "clips_music_attribution_info": {
+            "artist_name": "yaroslava_line",
+            "song_name": "Original audio",
+            "uses_original_audio": True,
+            "audio_id": "555",
+        },
+        "edge_media_to_tagged_user": {"edges": [{"node": {"user": {"id": "900"}}}]},
+        "pinned_for_users": [],
+    }
+    node.update(overrides)
+    return node

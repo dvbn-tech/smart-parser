@@ -59,6 +59,7 @@ def parse_media_item(node: Any, *, captured_at: datetime) -> ParsedItem:
         media_pk=media_pk,
         shortcode=f.req_str(node, "code"),
         owner_user_pk=owner_pk,
+        owner_username=(f.opt_str(node, "user.username") or "").lower() or None,
         product_type=product_type,
         media_type=_MEDIA_TYPES[media_type_code],
         taken_at=taken_at,
@@ -73,6 +74,7 @@ def parse_media_item(node: Any, *, captured_at: datetime) -> ParsedItem:
         **_audio(node),
         video_url=_first_url(node, "video_versions"),
         cover_url=_first_url(node, "image_versions2.candidates"),
+        **_details(node),
     )
 
     likes_hidden = f.opt_bool(node, "like_and_view_counts_disabled") is True
@@ -86,6 +88,9 @@ def parse_media_item(node: Any, *, captured_at: datetime) -> ParsedItem:
     metrics = IgMetrics(
         media_pk=media_pk,
         play_count=play_count,
+        video_view_count=f.opt_int(node, "view_count"),
+        fb_play_count=f.opt_int(node, "fb_play_count"),
+        fb_like_count=f.opt_int(node, "fb_like_count"),
         like_count=None if likes_hidden else f.opt_int(node, "like_count"),
         comment_count=None if comments_disabled else f.opt_int(node, "comment_count"),
         reshare_count=f.opt_int(node, "reshare_count"),
@@ -112,14 +117,24 @@ def _first_url(node: Any, list_path: str) -> str | None:
 
 
 def _audio(node: Any) -> dict[str, Any]:
+    empty: dict[str, Any] = {
+        "audio_id": None,
+        "audio_title": None,
+        "audio_artist": None,
+        "audio_type": None,
+        "is_original_audio": None,
+    }
     clips = f.opt_dict(node, "clips_metadata")
     if clips is None:
-        return {"audio_id": None, "audio_title": None, "is_original_audio": None}
+        return empty
+    audio_type = f.opt_str(clips, "audio_type")
     original = f.opt_dict(clips, "original_sound_info")
     if original is not None:
         return {
             "audio_id": f.opt_id_str(original, "audio_asset_id"),
             "audio_title": f.opt_str(original, "original_audio_title"),
+            "audio_artist": f.opt_str(original, "ig_artist.username"),
+            "audio_type": audio_type or "original_sounds",
             "is_original_audio": True,
         }
     music = f.opt_dict(clips, "music_info.music_asset_info")
@@ -127,6 +142,36 @@ def _audio(node: Any) -> dict[str, Any]:
         return {
             "audio_id": f.opt_id_str(music, "audio_cluster_id"),
             "audio_title": f.opt_str(music, "title"),
+            "audio_artist": f.opt_str(music, "display_artist"),
+            "audio_type": audio_type or "licensed_music",
             "is_original_audio": False,
         }
-    return {"audio_id": None, "audio_title": None, "is_original_audio": None}
+    return {**empty, "audio_type": audio_type}
+
+
+def _details(node: Any) -> dict[str, Any]:
+    """Необязательные подробности ролика. Нет поля — None, а не 0 и не пустая строка."""
+    location = f.opt_dict(node, "location")
+    mashup = f.opt_dict(node, "clips_metadata.mashup_info")
+    remix_of = f.opt_int(mashup, "original_media.pk") if mashup else None
+    lat = location.get("lat") if location else None
+    lng = location.get("lng") if location else None
+    caption = f.opt_dict(node, "caption")
+    return {
+        "has_audio": f.opt_bool(node, "has_audio"),
+        "caption_is_edited": f.opt_bool(node, "caption_is_edited")
+        if f.has(node, "caption_is_edited")
+        else (f.opt_bool(caption, "is_edited") if caption else None),
+        "accessibility_caption": f.opt_str(node, "accessibility_caption"),
+        "location_pk": f.opt_int(location, "pk") if location else None,
+        "location_name": f.opt_str(location, "name") if location else None,
+        "location_lat": Decimal(str(round(lat, 6))) if isinstance(lat, int | float) else None,
+        "location_lng": Decimal(str(round(lng, 6))) if isinstance(lng, int | float) else None,
+        "width": f.opt_int(node, "original_width"),
+        "height": f.opt_int(node, "original_height"),
+        "remix_of_media_pk": remix_of,
+        "is_shared_to_fb": f.opt_bool(node, "clips_metadata.is_shared_to_fb"),
+        "carousel_media_count": f.opt_int(node, "carousel_media_count"),
+        "commerciality_status": f.opt_str(node, "commerciality_status"),
+        "is_in_profile_grid": f.opt_bool(node, "is_in_profile_grid"),
+    }

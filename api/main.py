@@ -755,7 +755,13 @@ async def resolve_quarantine(qid: int, action: str, session: Db) -> dict[str, An
 @app.post("/api/v1/recompute")
 async def run_recompute(session: Db) -> dict[str, Any]:
     r = await recompute_all(session)
-    return {"media": r.media, "media_brand": r.media_brand, "seconds": r.seconds}
+    return {
+        "media": r.media,
+        "media_brand": r.media_brand,
+        "daily_rows": r.daily_rows,
+        "accounts": r.accounts,
+        "seconds": r.seconds,
+    }
 
 
 @app.get("/api/v1/health")
