@@ -120,7 +120,9 @@ async def _media_brand(session: AsyncSession) -> int:
                 found[b.id] = "collab"
             elif spk and spk in (usertags or []):
                 found[b.id] = "usertag"
-            elif shop_names.get(b.id) in mentions:
+            elif shop_names.get(b.id) in mentions or (
+                b.id in shop_names and f" {shop_names[b.id]} " in f" {(caption or '').lower()} "
+            ):
                 found[b.id] = "mention"
             elif b.id in article_brands.get(pk, set()):
                 found[b.id] = "article"

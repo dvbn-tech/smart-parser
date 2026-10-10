@@ -78,6 +78,10 @@ def _bio_brand_refs(brand: "BrandRef", profile: IgProfile) -> list[str]:
     return found
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"(?<![\w.])[a-z0-9._]{3,30}(?![\w])", text.lower())
+
+
 def name_token(name: str) -> str:
     """WAISTLINE, Waist Line, waist_line → waistline."""
     return re.sub(r"[\W_]+", "", name.lower())
@@ -131,7 +135,10 @@ def collect_evidence(
         if brand.account_pks & set(m.coauthors or []):
             out.append(Evidence("collab", m.media_pk, brand.name, weights.collab))
         caption = m.caption or ""
-        mentioned = set(extract_mentions(caption)) & brand.account_usernames
+        # Graph API вырезает «@» из подписи — ник бренда ищем и отдельным словом
+        mentioned = (
+            set(extract_mentions(caption)) | set(_words(caption))
+        ) & brand.account_usernames
         if brand.account_pks & set(m.usertags or []) or mentioned:
             out.append(Evidence("usertag", m.media_pk, brand.name, weights.usertag))
         for article in sorted(set(extract_wb_articles(caption)) & brand.wb_articles):

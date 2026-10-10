@@ -14,6 +14,7 @@ class Outcome(StrEnum):
     LOGIN_WALL = "login_wall"  # стена логина, checkpoint, капча
     NOT_FOUND = "not_found"
     SERVER_ERROR = "server_error"  # 5xx — повтор с другим IP
+    AUTH_ERROR = "auth_error"  # токен Graph API недействителен или нет прав — нужен человек
 
 
 _LOGIN_MARKERS = (

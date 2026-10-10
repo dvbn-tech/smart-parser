@@ -72,7 +72,9 @@ class Source(Protocol):
 
     async def fetch_profile(self, username: str) -> RawPage: ...
 
-    async def fetch_reels(self, user_pk: int, cursor: str | None) -> RawPage: ...
+    async def fetch_reels(
+        self, user_pk: int, cursor: str | None, username: str | None = None
+    ) -> RawPage: ...
 
     async def fetch_tagged(self, user_pk: int, cursor: str | None) -> RawPage: ...
 
@@ -89,6 +91,14 @@ class Transient(Exception):
     """Сеть, таймаут, 5xx: повтор по расписанию."""
 
 
+class AuthError(Exception):
+    """Токен Graph API недействителен или нет прав: дальше без человека не поедет."""
+
+
+class AccountUnavailable(Exception):
+    """Аккаунт не найден, личный или закрытый — источник его не видит. Повтор не поможет."""
+
+
 @dataclass
 class RunStats:
     pages: int = 0
@@ -97,6 +107,15 @@ class RunStats:
     quarantined: int = 0
     new_media: int = 0
     log: list[str] = field(default_factory=list)
+
+
+def _unavailable_message(source: str, username: str, page: RawPage) -> str:
+    if source == "graph":
+        return (
+            f"@{username}: Graph API не видит аккаунт — ника нет, аккаунт личный "
+            f"(не бизнес/авторский) или ограничен по возрасту. {page.meta.get('error') or ''}"
+        ).strip()
+    return f"@{username}: аккаунт не найден"
 
 
 def snapshot_day(ts: datetime) -> date:
@@ -133,6 +152,16 @@ class Runner:
             await q.defer(self.s, task.id, self.now() + BLOCK_DEFER, f"blocked: {e}")
             await self.s.commit()
             return "deferred"
+        except AuthError as e:
+            await self.s.rollback()
+            await q.defer(self.s, task.id, self.now() + BLOCK_DEFER, f"auth: {e}")
+            await self.s.commit()
+            return "auth_error"
+        except AccountUnavailable as e:
+            await self.s.rollback()
+            await q.fail(self.s, task.id, str(e))
+            await self.s.commit()
+            return "failed"
         except InvalidResponse as e:
             await self.s.rollback()
             await q.fail(self.s, task.id, f"invalid response: {e}")
@@ -202,10 +231,18 @@ class Runner:
             row.parse_status = "blocked"
             await self.s.commit()
             raise Blocked(f"{kind}: {outcome}")
+        if outcome == Outcome.AUTH_ERROR:
+            row.parse_status = "error"
+            row.parse_error = str(page.meta.get("error") or "")[:1000]
+            await self.s.commit()
+            raise AuthError(f"{kind}: {page.meta.get('error') or page.http_status}")
         if outcome == Outcome.SERVER_ERROR:
             row.parse_status = "error"
+            row.parse_error = str(page.meta.get("error") or "")[:1000] or None
             await self.s.commit()
-            raise Transient(f"{kind}: HTTP {page.http_status}")
+            raise Transient(
+                f"{kind}: HTTP {page.http_status} {page.meta.get('error') or ''}".strip()
+            )
         await self.s.commit()  # ответ зафиксирован до разбора
         return page, row
 
@@ -236,10 +273,16 @@ class Runner:
         body = page.json()
         if page.outcome == Outcome.NOT_FOUND or is_profile_not_found(body):
             await self._not_found(task, row)
+            if task.user_pk is None:
+                raise AccountUnavailable(_unavailable_message(self.src.name, username, page))
             return None
+        full_timeline = bool(getattr(self.src, "timeline_is_full", False))
         try:
             profile = self.src.parse_profile(page)
-            timeline = parse_profile_timeline(body, captured_at=page.received_at)
+            if full_timeline:
+                timeline = self.src.parse_timeline(page)  # type: ignore[attr-defined]
+            else:
+                timeline = parse_profile_timeline(body, captured_at=page.received_at)
         except InvalidResponse as e:
             await self._invalid(row, e)
             raise
@@ -248,7 +291,8 @@ class Runner:
         await repo.upsert_account(self.s, profile, now)
         await repo.write_account_snapshot(self.s, profile, snapshot_day(page.received_at), row.id)
         for item in timeline:
-            await self._store_item(item, row, partial=True)
+            # веб: 12 постов без просмотров — только метаданные; Graph API: полные снимки
+            await self._store_item(item, row, partial=not full_timeline)
         row.parse_status = "ok"
         if task.user_pk is None:
             task.user_pk = profile.user_pk
@@ -340,7 +384,12 @@ class Runner:
         pages_this_run = 0
         while True:
             page, row = await self._fetch(
-                task, page_no, "reels", self.src.fetch_reels(user_pk, cursor)
+                task,
+                page_no,
+                "reels",
+                self.src.fetch_reels(
+                    user_pk, cursor, username=acc.username if acc else task.username
+                ),
             )
             try:
                 parsed = self.src.parse_reels(page)
@@ -368,9 +417,11 @@ class Runner:
                 q.TaskType.MANUAL_REFRESH,
                 q.TaskType.CANDIDATE_PROBE,
             ):
+                # Лента идёт от новых к старым, закреплённые — в начале. Останавливаемся, когда
+                # старше 30 дней последний ролик страницы: закреп (даже неотмеченный, как в
+                # Graph API) так не остановит сбор раньше времени.
                 unpinned = [i for i in parsed.items if not i.media.is_pinned]
-                # закреплённые идут первыми независимо от даты — в условии остановки не учитываются
-                if unpinned and min(i.media.taken_at for i in unpinned) < horizon:
+                if unpinned and unpinned[-1].media.taken_at < horizon:
                     break
 
         reached_end = cursor is None
@@ -529,6 +580,9 @@ class Runner:
 
     async def brand_tagged(self, task: ScrapeTask) -> None:
         """Посты с отметкой аккаунта бренда: их авторы — кандидаты в креаторы."""
+        if not getattr(self.src, "supports_tagged", True):
+            self.stats.log.append(f"skip: отметки недоступны в источнике {self.src.name}")
+            return
         brand_id = int((task.payload or {}).get("brand_id", 0))
         brand = await self.s.get(Brand, brand_id)
         if brand is None or brand.shop_user_pk is None:

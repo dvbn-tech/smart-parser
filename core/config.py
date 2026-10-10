@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     s3_access_key: str = "minio"
     s3_secret_key: str = "minio12345"
 
+    # Источник данных: graph — официальный Instagram Graph API (Business Discovery),
+    # web — свои запросы к веб-эндпоинтам без логина
+    source: str = "graph"
+    meta_access_token: str | None = None  # долгоживущий токен пользователя Facebook (60 дней)
+    meta_ig_user_id: str | None = (
+        None  # id бизнес-аккаунта Instagram, от имени которого запрашиваем
+    )
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_graph_version: str = "v25.0"
+    meta_requests_per_hour: int = 150  # с запасом к лимиту Meta ~200 в час
+    meta_media_page_size: int = 50
+
     proxy_url: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

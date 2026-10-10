@@ -17,7 +17,7 @@ from parser.parse.models import IgProfile, ReelsPage
 @dataclass(frozen=True)
 class RawPage:
     request_kind: str  # profile | reels | tagged | search
-    source: str  # web | provider
+    source: str  # web | graph | provider
     url: str
     http_status: int
     body: bytes
@@ -34,6 +34,8 @@ class RawPage:
 
     @property
     def outcome(self) -> Outcome:
+        if "outcome" in self.meta:  # источник со своим форматом ошибок (Graph API)
+            return Outcome(self.meta["outcome"])
         return classify(self.http_status, self.location, self.json())
 
 

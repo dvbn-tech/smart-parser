@@ -5,11 +5,8 @@
 работают без логина и на какую глубину — выясняет PoC.
 """
 
-import asyncio
-import random
 import time
 import uuid
-from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +17,7 @@ from parser.parse.models import IgProfile, ReelsPage
 from parser.parse.profile import parse_web_profile_info
 from parser.parse.reels import parse_reels_page
 from parser.sources.base import RawPage
+from parser.sources.pacing import PACER
 
 BASE = "https://www.instagram.com"
 IG_APP_ID = "936619743392459"  # публичный id веб-клиента Instagram
@@ -35,36 +33,6 @@ HEADERS = {
     "Referer": f"{BASE}/",
 }
 REELS_PAGE_SIZE = 12
-
-
-class _Pacer:
-    """Темп на весь процесс, а не на одну задачу (техспека §6): пауза между запросами
-    и не больше global_requests_per_hour в скользящий час. Задачи воркера идут по
-    очереди, поэтому одного замка на процесс достаточно."""
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._last = 0.0
-        self._sent: deque[float] = deque()
-
-    async def wait(self, settings: Settings) -> None:
-        await self._lock.acquire()
-        now = time.monotonic()
-        pause = settings.min_pause_between_requests_s - (now - self._last)
-        while self._sent and now - self._sent[0] > 3600:
-            self._sent.popleft()
-        if len(self._sent) >= settings.global_requests_per_hour:
-            pause = max(pause, 3600 - (now - self._sent[0]))
-        if pause > 0:
-            await asyncio.sleep(pause * random.uniform(1.0, 1.25))
-        self._sent.append(time.monotonic())
-
-    def done(self) -> None:
-        self._last = time.monotonic()
-        self._lock.release()
-
-
-_PACER = _Pacer()
 
 
 class WebSource:
@@ -100,12 +68,14 @@ class WebSource:
         await self.aclose()
 
     async def _request(self, kind: str, method: str, path: str, **kwargs: Any) -> RawPage:
-        await _PACER.wait(self._settings)
+        await PACER.wait(
+            self._settings.min_pause_between_requests_s, self._settings.global_requests_per_hour
+        )
         started = time.monotonic()
         try:
             resp = await self._client.request(method, f"{BASE}{path}", **kwargs)
         finally:
-            _PACER.done()
+            PACER.done()
         return RawPage(
             request_kind=kind,
             source=self.name,
@@ -122,7 +92,9 @@ class WebSource:
             "profile", "GET", "/api/v1/users/web_profile_info/", params={"username": username}
         )
 
-    async def fetch_reels(self, user_pk: int, cursor: str | None) -> RawPage:
+    async def fetch_reels(
+        self, user_pk: int, cursor: str | None, username: str | None = None
+    ) -> RawPage:
         data = {
             "target_user_id": str(user_pk),
             "page_size": str(REELS_PAGE_SIZE),

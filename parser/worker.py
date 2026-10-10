@@ -66,6 +66,12 @@ async def work(
             }
             log.info("task_done", **result)
             done.append(result)
+            if status == "auth_error":
+                log.error(
+                    "meta_auth_error",
+                    hint="проверьте SP_META_ACCESS_TOKEN: smart-parser meta-check",
+                )
+                break
             blocks = blocks + 1 if status == "deferred" else 0
             if blocks >= MAX_CONSECUTIVE_BLOCKS:
                 log.warning("circuit_breaker_open", consecutive_blocks=blocks)

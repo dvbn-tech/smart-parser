@@ -76,10 +76,11 @@ def work(
     max_tasks: Annotated[int | None, typer.Option(help="выполнить не больше N задач")] = None,
     types: Annotated[str | None, typer.Option(help="только эти типы задач, через запятую")] = None,
 ) -> None:
-    """Воркер: выполняет задачи из очереди (запросы к Instagram через WebSource)."""
+    """Воркер: выполняет задачи из очереди. Источник — SP_SOURCE: graph (по умолчанию) или web."""
     from contextlib import asynccontextmanager
 
     from parser.raw.store import RawStore
+    from parser.sources.graph import GraphApiSource
     from parser.sources.web import WebSource
     from parser.worker import work as run_work
 
@@ -87,8 +88,12 @@ def work(
 
     @asynccontextmanager
     async def source(session_id: str):  # type: ignore[no-untyped-def]
-        async with WebSource(settings, session_id=session_id) as src:
-            yield src
+        if settings.source == "graph":
+            async with GraphApiSource(settings) as g:
+                yield g
+        else:
+            async with WebSource(settings, session_id=session_id) as w:
+                yield w
 
     async def run() -> None:
         raw = RawStore(settings)
@@ -111,7 +116,7 @@ def plan_cmd(slot: Annotated[str, typer.Argument(help="night | day | tagged")]) 
 
     async def run() -> None:
         async with session_scope() as session:
-            typer.echo(await plan(session, slot, datetime.now(UTC)))
+            typer.echo(await plan(session, slot, datetime.now(UTC), get_settings().source))
 
     asyncio.run(run())
 
@@ -170,6 +175,123 @@ def import_lists(
             typer.echo(await apply_plan(session, plan))
 
     asyncio.run(run())
+
+
+@app.command("meta-check")
+def meta_check(
+    username: Annotated[str, typer.Option(help="чей профиль запросить для проверки")] = "instagram",
+) -> None:
+    """Проверить настройку Graph API: токен, права, бизнес-аккаунт и один запрос Business Discovery."""
+    import httpx
+
+    s = get_settings()
+    if not s.meta_access_token or not s.meta_ig_user_id:
+        typer.echo(
+            "Нет SP_META_ACCESS_TOKEN или SP_META_IG_USER_ID в .env — см. docs/META_SETUP.md"
+        )
+        raise typer.Exit(1)
+    base = f"https://graph.facebook.com/{s.meta_graph_version}"
+    with httpx.Client(timeout=30) as c:
+        me = c.get(
+            f"{base}/{s.meta_ig_user_id}",
+            params={
+                "fields": "username,followers_count,media_count",
+                "access_token": s.meta_access_token,
+            },
+        ).json()
+        typer.echo(f"бизнес-аккаунт: {me}")
+        perms = c.get(f"{base}/me/permissions", params={"access_token": s.meta_access_token}).json()
+        granted = sorted(
+            p["permission"] for p in perms.get("data", []) if p.get("status") == "granted"
+        )
+        typer.echo(f"права: {', '.join(granted) or perms}")
+        need = {"instagram_basic", "pages_read_engagement"}
+        if not need <= set(granted):
+            typer.echo(f"не хватает прав: {', '.join(sorted(need - set(granted)))}")
+        if s.meta_app_id and s.meta_app_secret:
+            dbg = (
+                c.get(
+                    f"{base}/debug_token",
+                    params={
+                        "input_token": s.meta_access_token,
+                        "access_token": f"{s.meta_app_id}|{s.meta_app_secret}",
+                    },
+                )
+                .json()
+                .get("data", {})
+            )
+            exp = dbg.get("data_access_expires_at") or dbg.get("expires_at")
+            typer.echo(f"токен действителен: {dbg.get('is_valid')}, истекает (unix): {exp}")
+        bd = c.get(
+            f"{base}/{s.meta_ig_user_id}",
+            params={
+                "fields": f"business_discovery.username({username}){{username,followers_count,media_count,media.limit(3){{shortcode,media_product_type,view_count,like_count}}}}",
+                "access_token": s.meta_access_token,
+            },
+        ).json()
+        typer.echo(f"Business Discovery @{username}: {bd}")
+
+
+@app.command("meta-token")
+def meta_token(
+    short_token: Annotated[str, typer.Argument(help="короткий токен из Graph API Explorer")],
+    save: Annotated[bool, typer.Option(help="записать токен и id в .env")] = False,
+) -> None:
+    """Обменять короткий токен на долгоживущий (60 дней) и найти id бизнес-аккаунта Instagram."""
+    import httpx
+
+    s = get_settings()
+    if not s.meta_app_id or not s.meta_app_secret:
+        typer.echo(
+            "Нужны SP_META_APP_ID и SP_META_APP_SECRET в .env (Настройки приложения → Основное)"
+        )
+        raise typer.Exit(1)
+    base = f"https://graph.facebook.com/{s.meta_graph_version}"
+    with httpx.Client(timeout=30) as c:
+        r = c.get(
+            f"{base}/oauth/access_token",
+            params={
+                "grant_type": "fb_exchange_token",
+                "client_id": s.meta_app_id,
+                "client_secret": s.meta_app_secret,
+                "fb_exchange_token": short_token,
+            },
+        ).json()
+        token = r.get("access_token")
+        if not token:
+            typer.echo(f"Не удалось обменять токен: {r}")
+            raise typer.Exit(1)
+        pages = c.get(
+            f"{base}/me/accounts",
+            params={
+                "fields": "name,instagram_business_account{id,username}",
+                "access_token": token,
+            },
+        ).json()
+    ig = [
+        (p["name"], p["instagram_business_account"])
+        for p in pages.get("data", [])
+        if p.get("instagram_business_account")
+    ]
+    if not ig:
+        typer.echo(f"Нет страницы Facebook с привязанным бизнес-аккаунтом Instagram: {pages}")
+        raise typer.Exit(1)
+    for page_name, acc in ig:
+        typer.echo(f"страница «{page_name}» → Instagram @{acc.get('username')} id={acc['id']}")
+    ig_id = ig[0][1]["id"]
+    typer.echo(f"долгоживущий токен получен (действует ~60 дней), id бизнес-аккаунта: {ig_id}")
+    if save:
+        env = Path(".env")
+        old = env.read_text().splitlines() if env.exists() else []
+        keys = ("SP_META_ACCESS_TOKEN=", "SP_META_IG_USER_ID=")
+        lines = [ln for ln in old if not ln.startswith(keys)]
+        lines += [f"SP_META_ACCESS_TOKEN={token}", f"SP_META_IG_USER_ID={ig_id}"]
+        env.write_text("\n".join(lines) + "\n")
+        typer.echo("записано в .env")
+    else:
+        typer.echo(
+            "Добавьте в .env строки SP_META_ACCESS_TOKEN и SP_META_IG_USER_ID (или запустите с --save)"
+        )
 
 
 def normalize_username(value: str) -> str | None:

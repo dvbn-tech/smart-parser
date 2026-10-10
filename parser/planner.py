@@ -30,7 +30,11 @@ async def tracked_accounts(session: AsyncSession) -> list[int]:
     return [r[0] for r in rows]
 
 
-async def plan(session: AsyncSession, slot: str, now: datetime) -> dict[str, int]:
+async def plan(
+    session: AsyncSession, slot: str, now: datetime, source: str = "web"
+) -> dict[str, int]:
+    """source="graph": один запрос Business Discovery = профиль + 50 последних публикаций
+    с просмотрами, поэтому отдельный feed_head не нужен, а отметок бренда API не даёт."""
     msk = now.astimezone(MSK)
     day = msk.date().isoformat()
     created: dict[str, int] = {}
@@ -39,16 +43,24 @@ async def plan(session: AsyncSession, slot: str, now: datetime) -> dict[str, int
         if await q.enqueue(session, task_type, window=window, **kw) is not None:  # type: ignore[arg-type]
             created[task_type] = created.get(task_type, 0) + 1
 
+    graph = source == "graph"
     if slot == "night":
         for pk in await tracked_accounts(session):
             await put(q.TaskType.PROFILE, f"{day}T01", user_pk=pk)
-            await put(q.TaskType.FEED_HEAD, f"{day}T01", user_pk=pk)
+            if not graph:
+                await put(q.TaskType.FEED_HEAD, f"{day}T01", user_pk=pk)
             if pk % 7 == msk.weekday():
                 await put(q.TaskType.FEED_DEEP, day, user_pk=pk)
     elif slot == "day":
         for pk in await tracked_accounts(session):
-            await put(q.TaskType.FEED_HEAD, f"{day}T14", user_pk=pk, payload={"max_pages": 1})
+            if graph:
+                await put(q.TaskType.PROFILE, f"{day}T14", user_pk=pk)
+            else:
+                await put(q.TaskType.FEED_HEAD, f"{day}T14", user_pk=pk, payload={"max_pages": 1})
     elif slot == "tagged":
+        if graph:
+            await session.commit()
+            return created
         rows = await session.execute(text("SELECT id FROM brand WHERE shop_user_pk IS NOT NULL"))
         for (brand_id,) in rows:
             await put(

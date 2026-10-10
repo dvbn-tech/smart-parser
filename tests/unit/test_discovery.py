@@ -188,3 +188,9 @@ def test_ww_code_of_brand_counts_like_article() -> None:
     ev = collect_evidence(FIFTEEN, None, medias, W)
     assert {e.kind for e in ev} == {"ww_code"}
     assert score(ev, W) == Decimal("0.600")  # не больше 2 роликов с артикулами
+
+
+def test_brand_mention_without_at_sign() -> None:
+    """Graph API вырезает «@» из подписи: «спасибо waistline_shop» — всё равно отметка бренда."""
+    ev = collect_evidence(BRAND, None, [media(1, caption="спасибо waistline_shop за платье")], W)
+    assert [e.kind for e in ev] == ["usertag"]
