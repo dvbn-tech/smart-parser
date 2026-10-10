@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.analytics import router as analytics_router
 from core.db.models import Account, Brand, BrandAccount
 from core.db.session import session_scope
 from core.discovery.confidence import level
@@ -25,6 +26,7 @@ from parser.queue import tasks as q
 app = FastAPI(
     title="smart-parser", version="0.1.0", docs_url="/api/docs", openapi_url="/api/openapi.json"
 )
+app.include_router(analytics_router)
 
 
 async def db() -> AsyncIterator[AsyncSession]:
@@ -45,92 +47,6 @@ async def _data_as_of(session: AsyncSession) -> datetime | None:
         text("SELECT max(finished_at) FROM scrape_task WHERE status = 'succeeded'")
     )
     return value
-
-
-# --- Обзор и сравнение -----------------------------------------------------------------
-
-_BRAND_STATS = """
-WITH m AS (
-    SELECT mb.brand_id, s.views, s.spike_category, md.owner_user_pk, md.taken_at
-      FROM media_brand mb
-      JOIN media md ON md.media_pk = mb.media_pk
-      JOIN media_stats s ON s.media_pk = mb.media_pk
-     WHERE mb.reason <> 'shop'
-),
-cur AS (
-    SELECT brand_id,
-           count(*) AS reels,
-           count(*) FILTER (WHERE spike_category IN ('high','strong','viral')) AS spikes,
-           count(*) FILTER (WHERE spike_category = 'viral') AS viral,
-           coalesce(sum(views), 0)::bigint AS views,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY views) AS median_views,
-           count(DISTINCT owner_user_pk) AS active_creators
-      FROM m WHERE taken_at >= :since GROUP BY brand_id
-),
-prev AS (
-    SELECT brand_id, count(*) AS reels,
-           count(*) FILTER (WHERE spike_category IN ('high','strong','viral')) AS spikes,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY views) AS median_views
-      FROM m WHERE taken_at >= :prev_since AND taken_at < :since GROUP BY brand_id
-),
-creators AS (
-    SELECT brand_id,
-           count(*) FILTER (WHERE status = 'tracked' AND role = 'creator') AS creators,
-           count(*) FILTER (WHERE status = 'candidate') AS candidates
-      FROM brand_account GROUP BY brand_id
-)
-SELECT b.id, b.name, b.is_own, b.hashtags, b.spike_min_views, b.rocket_views,
-       sa.username AS shop_username,
-       coalesce(c.creators, 0) AS creators, coalesce(c.candidates, 0) AS candidates,
-       coalesce(cur.reels, 0) AS reels, coalesce(cur.spikes, 0) AS spikes,
-       coalesce(cur.viral, 0) AS viral, coalesce(cur.views, 0) AS views,
-       cur.median_views, coalesce(cur.active_creators, 0) AS active_creators,
-       prev.reels AS prev_reels, prev.spikes AS prev_spikes, prev.median_views AS prev_median_views
-  FROM brand b
-  LEFT JOIN account sa ON sa.user_pk = b.shop_user_pk
-  LEFT JOIN creators c ON c.brand_id = b.id
-  LEFT JOIN cur ON cur.brand_id = b.id
-  LEFT JOIN prev ON prev.brand_id = b.id
- ORDER BY b.is_own DESC, cur.views DESC NULLS LAST
-"""
-
-
-@app.get("/api/v1/overview")
-async def overview(session: Db, days: Days = 30) -> dict[str, Any]:
-    now = datetime.now(UTC)
-    since = now - timedelta(days=days)
-    brands = _rows(
-        await session.execute(
-            text(_BRAND_STATS), {"since": since, "prev_since": since - timedelta(days=days)}
-        )
-    )
-    for b in brands:
-        b["spike_share"] = b["spikes"] / b["reels"] if b["reels"] else None
-        b["prev_spike_share"] = b["prev_spikes"] / b["prev_reels"] if b.get("prev_reels") else None
-    daily = _rows(
-        await session.execute(
-            text(
-                """
-                SELECT mb.brand_id, date_trunc('week', md.taken_at)::date AS week,
-                       count(*) AS reels,
-                       count(*) FILTER (WHERE s.spike_category IN ('high','strong','viral')) AS spikes
-                  FROM media_brand mb
-                  JOIN media md ON md.media_pk = mb.media_pk
-                  JOIN media_stats s ON s.media_pk = mb.media_pk
-                 WHERE md.taken_at >= :since AND mb.reason <> 'shop'
-                 GROUP BY 1, 2 ORDER BY 2
-                """
-            ),
-            {"since": now - timedelta(days=max(days, 90))},
-        )
-    )
-    return {
-        "data_as_of": await _data_as_of(session),
-        "days": days,
-        "brands": brands,
-        "weekly": daily,
-        "parser": await _parser_summary(session),
-    }
 
 
 # --- Аномалии --------------------------------------------------------------------------
@@ -179,7 +95,8 @@ async def anomalies(
                        md.audio_title, md.is_paid_partnership,
                        a.user_pk AS owner_user_pk, a.username AS owner_username,
                        s.views, s.views_7d, s.baseline_median, s.spike_ratio, s.spike_category,
-                       s.spike_method, s.is_early, s.is_rocket, s.er,
+                       s.spike_method, s.is_early, s.is_rocket, s.er, s.likes, s.comments, s.reshares,
+                       s.views_per_day, md.audio_artist, md.location_name,
                        json_agg(json_build_object('id', b.id, 'name', b.name, 'is_own', b.is_own,
                                                   'reason', mb.reason) ORDER BY b.name) AS brands
                   FROM media_stats s
@@ -430,41 +347,23 @@ async def brand_detail(brand_id: int, session: Db) -> dict[str, Any]:
             text(
                 """
                 SELECT a.user_pk, a.username, a.full_name, a.status AS account_status,
-                       a.last_scraped_at, ba.role, ba.link_type, ba.status, ba.is_own_creator,
-                       ba.confidence, ba.first_seen,
-                       (SELECT followers_count FROM account_snapshot s WHERE s.user_pk = a.user_pk
-                         ORDER BY snapshot_date DESC LIMIT 1) AS followers,
-                       st.reels, st.median_views, st.spikes, st.max_ratio, st.last_reel_at, st.trend
+                       a.last_scraped_at, a.is_verified, ba.role, ba.link_type, ba.status,
+                       ba.is_own_creator, ba.confidence, ba.first_seen, st.*,
+                       st.median_views_20 AS median_views, st.reels_total AS reels,
+                       st.spikes_total AS spikes, st.best_ratio AS max_ratio,
+                       st.last_reel_at, st.trend
                   FROM brand_account ba
                   JOIN account a ON a.user_pk = ba.user_pk
-                  LEFT JOIN LATERAL (
-                      SELECT count(*) AS reels,
-                             count(*) FILTER (WHERE s.spike_category IN ('high','strong','viral')) AS spikes,
-                             max(s.spike_ratio) AS max_ratio,
-                             max(md.taken_at) AS last_reel_at,
-                             (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x.views) FROM (
-                                 SELECT s2.views FROM media m2 JOIN media_stats s2 USING (media_pk)
-                                  WHERE m2.owner_user_pk = a.user_pk ORDER BY m2.taken_at DESC LIMIT 20) x
-                             ) AS median_views,
-                             (SELECT CASE WHEN p.prev > 0 THEN p.cur / p.prev END FROM (
-                                 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY views)
-                                            FILTER (WHERE rn <= 20) AS cur,
-                                        percentile_cont(0.5) WITHIN GROUP (ORDER BY views)
-                                            FILTER (WHERE rn > 20 AND rn <= 40) AS prev
-                                   FROM (SELECT s3.views, row_number() OVER (ORDER BY m3.taken_at DESC) AS rn
-                                           FROM media m3 JOIN media_stats s3 USING (media_pk)
-                                          WHERE m3.owner_user_pk = a.user_pk) r) p
-                             ) AS trend
-                        FROM media md JOIN media_stats s USING (media_pk)
-                       WHERE md.owner_user_pk = a.user_pk
-                  ) st ON true
+                  LEFT JOIN account_stats st ON st.user_pk = a.user_pk
                  WHERE ba.brand_id = :b AND ba.status = 'tracked'
-                 ORDER BY ba.role DESC, st.median_views DESC NULLS LAST
+                 ORDER BY ba.role DESC, st.median_views_20 DESC NULLS LAST
                 """
             ),
             {"b": brand_id},
         )
     )
+    for c in creators:
+        c.pop("computed_at", None)
     return {"brand": dict(brand), "creators": creators}
 
 
@@ -586,7 +485,9 @@ async def account_detail(user_pk: int, session: Db) -> dict[str, Any]:
                 SELECT md.media_pk::text AS media_pk, md.shortcode, md.taken_at, md.caption, md.duration_s,
                        md.audio_title, md.is_paid_partnership, md.missing_since,
                        s.views, s.views_7d, s.baseline_median, s.spike_ratio, s.spike_category,
-                       s.spike_method, s.is_early, s.is_rocket, s.er
+                       s.spike_method, s.is_early, s.is_rocket, s.er, s.likes, s.comments, s.reshares,
+                       s.views_per_day, s.views_before_observation, md.audio_artist, md.audio_type,
+                       md.location_name, md.width, md.height, md.coauthors, md.usertags
                   FROM media md LEFT JOIN media_stats s USING (media_pk)
                  WHERE md.owner_user_pk = :u AND md.product_type = 'clips'
                  ORDER BY md.taken_at DESC

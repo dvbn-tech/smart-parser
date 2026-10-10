@@ -58,6 +58,8 @@ export default function BrandPage() {
           </div>
         </div>
         <div className="row">
+          <Link className="btn" to={`/creators?brands=${id}&cols=all`}>Все показатели креаторов</Link>
+          <Link className="btn" to={`/insights?brands=${id}`}>Что работает у бренда</Link>
           <Link className="btn" to={`/anomalies?brands=${id}&days=90`}>Аномалии бренда</Link>
           <Link className="btn" to={`/candidates?brand=${id}`}>Кандидаты</Link>
         </div>
@@ -106,13 +108,17 @@ export default function BrandPage() {
                   { key: "followers", label: "Подписчики", right: true, sort: (c) => c.followers, render: (c) => fmtCompact(c.followers) },
                   { key: "reels", label: "Роликов", right: true, sort: (c) => c.reels, render: (c) => fmtInt(c.reels) },
                   { key: "median", label: "Медиана 20 последних", right: true, sort: (c) => c.median_views, render: (c) => fmtCompact(c.median_views) },
+                  { key: "avg", label: "Среднее (20)", right: true, sort: (c) => c.avg_views_20 ?? null, render: (c) => fmtCompact(c.avg_views_20) },
+                  { key: "vpd", label: "В сутки", right: true, title: "в среднем просмотров в сутки за 30 дней", sort: (c) => c.views_per_day_30d ?? null, render: (c) => fmtCompact(c.views_per_day_30d) },
+                  { key: "er", label: "ER", right: true, sort: (c) => (c.er_median_20 === null || c.er_median_20 === undefined ? null : Number(c.er_median_20)), render: (c) => (c.er_median_20 === null || c.er_median_20 === undefined ? "—" : `${(Number(c.er_median_20) * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%`) },
+                  { key: "ppw", label: "В неделю", right: true, title: "роликов в неделю за 90 дней", sort: (c) => (c.posts_per_week_90d === null || c.posts_per_week_90d === undefined ? null : Number(c.posts_per_week_90d)), render: (c) => (c.posts_per_week_90d === null || c.posts_per_week_90d === undefined ? "—" : Number(c.posts_per_week_90d).toLocaleString("ru-RU", { maximumFractionDigits: 1 })) },
                   {
                     key: "trend",
                     label: "Тренд",
                     right: true,
                     title: "медиана последних 20 / медиана предыдущих 20",
                     sort: (c) => c.trend,
-                    render: (c) => (c.trend === null ? <span className="muted">—</span> : <span className={c.trend >= 1 ? "up" : "down"}>{c.trend >= 1 ? "▲" : "▼"} {fmtRatio(c.trend)}</span>),
+                    render: (c) => (c.trend === null ? <span className="muted">—</span> : <span className={c.trend >= 1 ? "up" : "down"}>{c.trend >= 1 ? "▲" : "▼"} {fmtRatio(c.trend, 2)}</span>),
                   },
                   { key: "spikes", label: "Всплесков", right: true, sort: (c) => c.spikes, render: (c) => fmtInt(c.spikes) },
                   { key: "hit", label: "Hit rate", right: true, sort: (c) => (c.reels ? (c.spikes ?? 0) / c.reels : null), render: (c) => (c.reels ? `${Math.round(((c.spikes ?? 0) / c.reels) * 100)}%` : "—") },

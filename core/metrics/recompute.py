@@ -204,20 +204,18 @@ async def _account_stats(session: AsyncSession, now: datetime) -> int:
     for owner, *facts in rows:
         reels[owner].append(ReelFacts(*facts))
 
-    views_30d: dict[int, int] = dict(
-        (
-            await session.execute(
-                text(
-                    """
-                    SELECT m.owner_user_pk, sum(d.views_increment)::bigint
-                      FROM media_daily_views d JOIN media m USING (media_pk)
-                     WHERE d.date > :since GROUP BY 1
-                    """
-                ),
-                {"since": (now - timedelta(days=30)).date()},
-            )
-        ).tuples()
+    daily = await session.execute(
+        text(
+            """
+            SELECT m.owner_user_pk, sum(d.views_increment)::bigint
+              FROM media_daily_views d JOIN media m USING (media_pk)
+             WHERE d.date > :since GROUP BY 1
+            """
+        ),
+        {"since": (now - timedelta(days=30)).date()},
     )
+    # не dict(result): у результата SQLAlchemy 2.1 есть keys(), и dict() считает его словарём
+    views_30d: dict[int, int] = {pk: views for pk, views in daily}
     followers: dict[int, dict[int, int]] = defaultdict(dict)
     snap_rows = await session.execute(
         text(

@@ -64,6 +64,14 @@ export interface MediaRow {
   er: number | null;
   brands?: BrandRef[];
   missing_since?: string | null;
+  likes?: number | null;
+  comments?: number | null;
+  reshares?: number | null;
+  views_per_day?: Num;
+  views_before_observation?: number | null;
+  audio_artist?: string | null;
+  audio_type?: string | null;
+  location_name?: string | null;
 }
 
 export interface BrandStats {
@@ -137,6 +145,12 @@ export interface CreatorRow {
   max_ratio: number | null;
   last_reel_at: string | null;
   trend: number | null;
+  avg_views_20?: number | null;
+  views_per_day_30d?: number | null;
+  er_median_20?: Num;
+  posts_per_week_90d?: Num;
+  followers_delta_30d?: number | null;
+  hit_rate?: Num;
 }
 
 export interface Evidence {
@@ -207,4 +221,162 @@ export interface ParserStatus {
   quarantine: { id: number; media_pk: string; shortcode: string | null; username: string | null; snapshot_date: string; play_count: number; reason: string; raw_response_id: number }[];
   invalid_responses: { id: number; request_kind: string; http_status: number | null; shape_fingerprint: string | null; parse_error: string | null; s3_key: string; received_at: string }[];
   problem_accounts: { user_pk: number; username: string; status: string; last_scraped_at: string | null }[];
+}
+
+export type Num = number | string | null;
+
+export interface BrandPeriod {
+  brand_id: number;
+  reels: number;
+  active_creators: number;
+  views: number;
+  avg_views: number | null;
+  median_views: number | null;
+  p90_views: number | null;
+  max_views: number | null;
+  spikes: number;
+  viral: number;
+  million_plus: number;
+  er_median: number | null;
+  likes: number;
+  comments: number;
+  avg_duration_s: Num;
+  paid_share: Num;
+  original_audio_share: Num;
+  median_ratio: number | null;
+  views_gained: number | null;
+}
+
+export interface OverviewBrand {
+  id: number;
+  name: string;
+  is_own: boolean;
+  hashtags: string[];
+  shop_username: string | null;
+  shop_user_pk: number | null;
+  creators: number;
+  own_creators: number;
+  candidates: number;
+  shop_followers: number | null;
+  creators_followers: Num;
+  cur: BrandPeriod | null;
+  prev: BrandPeriod | null;
+}
+
+export interface Leader {
+  user_pk: number;
+  username: string;
+  brand_id: number;
+  brand_name: string;
+  is_own: boolean;
+  reels: number;
+  median_views: number | null;
+  avg_views: number | null;
+  spikes: number;
+  views_gained: number | null;
+  followers: number | null;
+  median_views_20: number | null;
+  trend: Num;
+}
+
+export interface OverviewV2 {
+  data_as_of: string | null;
+  days: number;
+  observed_since: string | null;
+  brands: OverviewBrand[];
+  daily: { brand_id: number; date: string; views: number }[];
+  weekly: { brand_id: number; week: string; reels: number; spikes: number; median_views: number | null }[];
+  leaders: Leader[];
+}
+
+export interface CreatorStats {
+  user_pk: number;
+  username: string;
+  full_name: string | null;
+  account_status: string;
+  is_verified: boolean;
+  category: string | null;
+  last_scraped_at: string | null;
+  brands: { id: number; name: string; is_own: boolean; role: string; link_type: string | null; is_own_creator: boolean }[];
+  is_own_creator: boolean;
+  is_own_brand: boolean;
+  reels_total: number | null;
+  reels_7d: number | null;
+  reels_30d: number | null;
+  reels_90d: number | null;
+  posts_per_week_90d: Num;
+  avg_views_20: number | null;
+  median_views_20: number | null;
+  median_views_prev_20: number | null;
+  trend: Num;
+  p90_views: number | null;
+  max_views: number | null;
+  min_views_20: number | null;
+  total_views: number | null;
+  views_30d: number | null;
+  views_per_day_30d: number | null;
+  cv_views_20: Num;
+  avg_likes_20: number | null;
+  avg_comments_20: number | null;
+  er_median_20: Num;
+  spikes_total: number | null;
+  spikes_90d: number | null;
+  viral_total: number | null;
+  hit_rate: Num;
+  best_ratio: Num;
+  avg_duration_s: Num;
+  paid_share: Num;
+  original_audio_share: Num;
+  followers: number | null;
+  followers_delta_7d: number | null;
+  followers_delta_30d: number | null;
+  views_to_followers: Num;
+  first_reel_at: string | null;
+  last_reel_at: string | null;
+  p_reels: number | null;
+  p_avg_views: number | null;
+  p_median_views: number | null;
+  p_max_views: number | null;
+  p_spikes: number | null;
+  p_viral: number | null;
+  p_best_ratio: Num;
+  p_er: Num;
+  p_views_gained: number | null;
+}
+
+export interface InsightRow {
+  key: string | number;
+  reels: number;
+  creators: number;
+  median_ratio: number | null;
+  avg_ratio: Num;
+  spike_rate: Num;
+  spikes: number;
+  median_views: number | null;
+  median_er: number | null;
+  lift?: number | null;
+  wilson_low?: number;
+  is_original?: boolean;
+}
+
+export interface Insights {
+  days: number;
+  total: InsightRow;
+  by_hour: InsightRow[];
+  by_weekday: InsightRow[];
+  by_duration: InsightRow[];
+  features: InsightRow[];
+  caption_length: InsightRow[];
+  hashtags: InsightRow[];
+  audio: InsightRow[];
+  locations: InsightRow[];
+  ratio_histogram: { key: string; reels: number }[];
+}
+
+export interface AccountSeries {
+  followers: { date: string; followers: number }[];
+  views: { date: string; views: number }[];
+  stats: CreatorStats | null;
+  hashtags: { tag: string; reels: number; median_ratio: number | null; median_views: number | null }[];
+  by_hour: { hour: number; reels: number; median_views: number | null }[];
 }

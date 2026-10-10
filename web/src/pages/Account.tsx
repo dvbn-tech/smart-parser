@@ -2,10 +2,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { EChartsOption } from "echarts";
 import { useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type AccountDetail, type MediaRow } from "../api";
-import { Chart, chartChrome, cssVar } from "../components/Chart";
+import { api, type AccountDetail, type AccountSeries, type MediaRow, type Num } from "../api";
+import { Chart, barOption, chartChrome, cssVar, lineOption } from "../components/Chart";
 import { Empty, ErrorBox, KpiTile, Loading, MediaCard, toast, useParam } from "../components/ui";
-import { CATEGORY_LABEL, LINK_LABEL, STATUS_LABEL, TASK_LABEL, fmtAgo, fmtCompact, fmtDateTime, fmtInt, fmtRatio } from "../format";
+import { CATEGORY_LABEL, LINK_LABEL, STATUS_LABEL, TASK_LABEL, fmtAgo, fmtCompact, fmtDate, fmtDateTime, fmtDec, fmtInt, fmtPct, fmtRatio } from "../format";
+
+const num = (v: Num | undefined): number | null => (v === null || v === undefined ? null : Number(v));
+const SORTS = { date: "сначала новые", views: "по просмотрам", ratio: "по силе всплеска", er: "по ER" } as const;
+
+function Signed({ v, suffix = "" }: { v: number | null; suffix?: string }) {
+  if (v === null) return <span className="muted">нет данных</span>;
+  return <span className={v >= 0 ? "up" : "down"}>{v >= 0 ? "▲ +" : "▼ "}{fmtCompact(Math.abs(v))}{suffix}</span>;
+}
 
 const ORDER = ["none", "high", "strong", "viral"] as const;
 
@@ -21,6 +29,41 @@ export default function AccountPage() {
   const qc = useQueryClient();
   const [onlySpikes, setOnlySpikes] = useParam("spikes", "0");
   const q = useQuery({ queryKey: ["account", userPk], queryFn: () => api.get<AccountDetail>(`/accounts/${userPk}`) });
+  const series = useQuery({ queryKey: ["account-series", userPk], queryFn: () => api.get<AccountSeries>(`/accounts/${userPk}/series?days=90`) });
+  const [sort, setSort] = useParam("sort", "date");
+  const st = series.data?.stats ?? null;
+  const viewsOption = useCallback(() => {
+    const rows = series.data?.views ?? [];
+    return lineOption(
+      rows.map((r) => new Date(r.date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })),
+      [{ name: "Просмотры", color: cssVar("--series-1"), data: rows.map((r) => Number(r.views)) }],
+      (v) => fmtCompact(v),
+    );
+  }, [series.data]);
+  const followersOption = useCallback(() => {
+    const rows = series.data?.followers ?? [];
+    const opt = lineOption(
+      rows.map((r) => new Date(r.date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })),
+      [{ name: "Подписчики", color: cssVar("--series-3"), data: rows.map((r) => r.followers) }],
+      // узкий диапазон: подписи в тысячах без округления до миллионов
+      (v) => `${Math.round(v / 1000).toLocaleString("ru-RU")} тыс.`,
+    );
+    return { ...opt, yAxis: { ...(opt.yAxis as object), scale: true } };
+  }, [series.data]);
+  const hoursOption = useCallback(() => {
+    const rows = series.data?.by_hour ?? [];
+    const best = Math.max(...rows.map((r) => r.median_views ?? 0));
+    return barOption(
+      rows.map((r) => `${r.hour}:00`),
+      rows.map((r) => r.median_views),
+      {
+        fmt: (v) => fmtCompact(v),
+        tooltip: (i) => `<b>${rows[i].hour}:00</b><br/>роликов: ${rows[i].reels}<br/>медиана: ${fmtCompact(rows[i].median_views)}`,
+        highlight: (v) => v >= best * 0.8,
+        color: cssVar("--series-1"),
+      },
+    );
+  }, [series.data]);
   const refresh = useMutation({
     mutationFn: () => api.post<{ queued: boolean }>(`/accounts/${userPk}/refresh`),
     onSuccess: (r) => {
@@ -77,7 +120,10 @@ export default function AccountPage() {
   if (q.error) return <ErrorBox error={q.error} />;
   if (!q.data) return null;
   const { account: a, snapshot, brands, tasks } = q.data;
-  const shown = onlySpikes === "1" ? media.filter((m) => ["high", "strong", "viral"].includes(m.spike_category ?? "")) : media;
+  const filtered = onlySpikes === "1" ? media.filter((m) => ["high", "strong", "viral"].includes(m.spike_category ?? "")) : media;
+  const key = (m: MediaRow): number =>
+    sort === "views" ? num(m.views) ?? -1 : sort === "ratio" ? num(m.spike_ratio) ?? -1 : sort === "er" ? num(m.er) ?? -1 : new Date(m.taken_at).getTime();
+  const shown = [...filtered].sort((a, b) => key(b) - key(a));
 
   return (
     <div className="stack" style={{ gap: 20 }}>
@@ -106,11 +152,59 @@ export default function AccountPage() {
         </div>
       </div>
 
-      <div className="grid-kpi">
-        <KpiTile label="Подписчики" value={fmtCompact(snapshot?.followers_count)} />
+      <div className="grid-kpi dense">
+        <KpiTile label="Подписчики" value={fmtCompact(snapshot?.followers_count)} delta={<Signed v={st?.followers_delta_30d ?? null} suffix=" за 30 дн." />} />
+        <KpiTile label="Δ подписчиков за 7 дн." value={<Signed v={st?.followers_delta_7d ?? null} />} />
         <KpiTile label="Reels в базе" value={fmtInt(media.length)} delta={<span className="muted">постов всего: {fmtInt(snapshot?.media_count)}</span>} />
-        <KpiTile label="Медиана 20 последних" value={fmtCompact(stats.m20)} delta={stats.trend ? <span className={stats.trend >= 1 ? "up" : "down"}>{stats.trend >= 1 ? "▲" : "▼"} {fmtRatio(stats.trend)} к 20 предыдущим</span> : undefined} />
-        <KpiTile label="Всплесков" value={fmtInt(stats.spikes)} delta={<span className="muted">hit rate {stats.hit === null ? "—" : `${Math.round(stats.hit * 100)}%`}</span>} />
+        <KpiTile label="Публикует в неделю" value={st?.posts_per_week_90d ? fmtDec(Number(st.posts_per_week_90d)) : "—"} delta={<span className="muted">за 7 / 30 / 90 дн.: {st?.reels_7d ?? 0} / {st?.reels_30d ?? 0} / {st?.reels_90d ?? 0}</span>} />
+        <KpiTile label="Среднее (20 посл.)" value={fmtCompact(st?.avg_views_20 ?? null)} />
+        <KpiTile label="Медиана (20 посл.)" value={fmtCompact(stats.m20)} delta={stats.trend ? <span className={stats.trend >= 1 ? "up" : "down"}>{stats.trend >= 1 ? "▲" : "▼"} {fmtRatio(stats.trend, 2)} к 20 предыдущим</span> : undefined} />
+        <KpiTile label="В среднем просмотров в сутки" value={fmtCompact(st?.views_per_day_30d ?? null)} delta={<span className="muted">за 30 дн.: {fmtCompact(st?.views_30d ?? null)}</span>} />
+        <KpiTile label="Максимум / P90" value={`${fmtCompact(st?.max_views ?? null)}`} delta={<span className="muted">P90 {fmtCompact(st?.p90_views ?? null)}</span>} />
+        <KpiTile label="Всего просмотров" value={fmtCompact(st?.total_views ?? null)} delta={<span className="muted">по всем Reels в базе</span>} />
+        <KpiTile label="Стабильность" value={st?.cv_views_20 ? fmtDec(Number(st.cv_views_20), 2) : "—"} hint="σ / среднее по 20 последним: меньше — стабильнее" delta={<span className="muted">{num(st?.cv_views_20) === null ? "" : num(st?.cv_views_20)! < 0.6 ? "стабильный" : num(st?.cv_views_20)! < 1.2 ? "умеренный разброс" : "сильный разброс"}</span>} />
+        <KpiTile label="Всплесков" value={fmtInt(stats.spikes)} delta={<span className="muted">hit rate {fmtPct(num(st?.hit_rate))} · viral {st?.viral_total ?? 0}</span>} />
+        <KpiTile label="Лучший всплеск" value={fmtRatio(num(st?.best_ratio))} />
+        <KpiTile label="ER (медиана)" value={fmtPct(num(st?.er_median_20), 2)} delta={<span className="muted">лайков {fmtCompact(st?.avg_likes_20 ?? null)} · комм. {fmtCompact(st?.avg_comments_20 ?? null)}</span>} />
+        <KpiTile label="Охват / подписчики" value={fmtPct(num(st?.views_to_followers), 0)} hint="медиана просмотров / подписчики" />
+        <KpiTile label="Средняя длительность" value={num(st?.avg_duration_s) === null ? "—" : `${Math.round(num(st?.avg_duration_s)!)} с`} />
+        <KpiTile label="Партнёрских / свой звук" value={`${fmtPct(num(st?.paid_share), 0)} / ${fmtPct(num(st?.original_audio_share), 0)}`} />
+        <KpiTile label="Первый ролик в базе" value={<span style={{ fontSize: 18 }}>{fmtDate(st?.first_reel_at ?? null)}</span>} delta={<span className="muted">последний {fmtAgo(st?.last_reel_at ?? null)}</span>} />
+      </div>
+
+      <div className="grid2">
+        <div className="card">
+          <h2>Прирост просмотров по дням</h2>
+          {series.data?.views.length ? <Chart option={viewsOption} height={220} /> : <Empty>Ещё нет ежедневных снимков.</Empty>}
+          <div className="hint">Сумма по всем роликам креатора. Просмотры, набранные до начала наблюдения, сюда не входят.</div>
+        </div>
+        <div className="card">
+          <h2>Подписчики</h2>
+          {series.data?.followers.length ? <Chart option={followersOption} height={220} /> : <Empty>Нет снимков профиля.</Empty>}
+        </div>
+        <div className="card">
+          <h2>Медиана просмотров по часу публикации (МСК)</h2>
+          {series.data?.by_hour.length ? <Chart option={hoursOption} height={220} /> : <Empty>Нет данных.</Empty>}
+          <div className="hint">Синие столбцы — часы, где креатор набирает не меньше 80% от лучшего результата.</div>
+        </div>
+        <div className="card flush">
+          <div className="card-head"><h2>Хэштеги креатора</h2><span className="hint">использованы 2+ раза</span></div>
+          {series.data?.hashtags.length ? (
+            <table>
+              <thead><tr><th>Хэштег</th><th className="r">Роликов</th><th className="r">Медиана</th><th className="r">От уровня автора</th></tr></thead>
+              <tbody>
+                {series.data.hashtags.map((h) => (
+                  <tr key={h.tag}>
+                    <td>#{h.tag}</td>
+                    <td className="r">{h.reels}</td>
+                    <td className="r">{fmtCompact(h.median_views)}</td>
+                    <td className="r"><span className={(num(h.median_ratio) ?? 1) >= 1 ? "up" : "down"}>{fmtRatio(num(h.median_ratio))}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <Empty>Повторяющихся хэштегов нет.</Empty>}
+        </div>
       </div>
 
       <div className="card">
@@ -122,7 +216,12 @@ export default function AccountPage() {
       <div className="stack" style={{ gap: 12 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h2 style={{ margin: 0 }}>Ролики</h2>
+          <div className="row">
+          <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Сортировка роликов">
+            {Object.entries(SORTS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
           <label className="check"><input type="checkbox" checked={onlySpikes === "1"} onChange={(e) => setOnlySpikes(e.target.checked ? "1" : null)} /> Только взлетевшие (×2 и выше)</label>
+          </div>
         </div>
         {shown.length ? <div className="media-grid">{shown.map((m) => <MediaCard key={m.media_pk} m={m} showOwner={false} />)}</div> : <Empty>Нет роликов.</Empty>}
       </div>

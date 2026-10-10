@@ -24,9 +24,9 @@ export function fmtPct(v: number | null | undefined, digits = 1): string {
   return `${(v * 100).toLocaleString("ru-RU", { maximumFractionDigits: digits })}%`;
 }
 
-export function fmtRatio(v: number | string | null | undefined): string {
+export function fmtRatio(v: number | string | null | undefined, digits = 1): string {
   if (v === null || v === undefined) return "—";
-  return `×${Number(v).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}`;
+  return `×${Number(v).toLocaleString("ru-RU", { minimumFractionDigits: digits > 1 ? digits : 0, maximumFractionDigits: digits })}`;
 }
 
 export function fmtDate(v: string | null | undefined): string {
@@ -111,4 +111,9 @@ export const STATUS_LABEL: Record<string, string> = {
 
 export function igUrl(shortcode: string): string {
   return `https://www.instagram.com/reel/${shortcode}/`;
+}
+
+export function fmtDec(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return v.toLocaleString("ru-RU", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }

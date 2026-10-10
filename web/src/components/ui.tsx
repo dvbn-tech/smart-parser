@@ -82,7 +82,16 @@ export function MediaCard({ m, showOwner = true }: { m: MediaRow; showOwner?: bo
           {showOwner && m.owner_user_pk ? <Link to={`/accounts/${m.owner_user_pk}`}>@{m.owner_username}</Link> : <span />}
           <span>{fmtDate(m.taken_at)}</span>
         </div>
-        {m.er !== null && <div className="meta"><span>ER {(Number(m.er) * 100).toFixed(1)}%</span><span>{m.audio_title ?? ""}</span></div>}
+        <div className="meta" title="лайки · комментарии · репосты">
+          <span>♥ {fmtCompact(m.likes ?? null)} · 💬 {fmtCompact(m.comments ?? null)}{m.reshares ? ` · ↗ ${fmtCompact(m.reshares)}` : ""}</span>
+          {m.er !== null && <span>ER {(Number(m.er) * 100).toFixed(1)}%</span>}
+        </div>
+        {(m.audio_title || m.location_name) && (
+          <div className="meta">
+            <span title={m.audio_artist ?? ""} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>♪ {m.audio_title ?? "—"}</span>
+            {m.location_name && <span>📍 {m.location_name}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -153,9 +162,40 @@ export interface Column<T> {
   sort?: (row: T) => number | string | null;
   render: (row: T) => ReactNode;
   title?: string;
+  /** Значение для выгрузки CSV; без него колонка в выгрузку не попадает. */
+  csv?: (row: T) => string | number | null | undefined;
 }
 
-export function SortTable<T>({ rows, columns, initial, rowKey }: { rows: T[]; columns: Column<T>[]; initial?: string; rowKey: (r: T) => string | number }) {
+export function downloadCsv<T>(filename: string, rows: T[], columns: Column<T>[]) {
+  const cols = columns.filter((c) => c.csv);
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [cols.map((c) => esc(c.label)).join(";"), ...rows.map((r) => cols.map((c) => esc(c.csv!(r))).join(";"))];
+  const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+export function SortTable<T>({
+  rows,
+  columns,
+  initial,
+  rowKey,
+  sticky = false,
+  limit,
+}: {
+  rows: T[];
+  columns: Column<T>[];
+  initial?: string;
+  rowKey: (r: T) => string | number;
+  sticky?: boolean;
+  limit?: number;
+}) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: initial ?? "", dir: -1 });
   const sorted = useMemo(() => {
     const col = columns.find((c) => c.key === sort.key);
@@ -169,8 +209,9 @@ export function SortTable<T>({ rows, columns, initial, rowKey }: { rows: T[]; co
       return (va < vb ? -1 : va > vb ? 1 : 0) * sort.dir;
     });
   }, [rows, columns, sort]);
+  const shown = limit ? sorted.slice(0, limit) : sorted;
   return (
-    <div className="table-wrap">
+    <div className={`table-wrap${sticky ? " sticky-first" : ""}`}>
       <table>
         <thead>
           <tr>
@@ -188,7 +229,7 @@ export function SortTable<T>({ rows, columns, initial, rowKey }: { rows: T[]; co
           </tr>
         </thead>
         <tbody>
-          {sorted.map((r) => (
+          {shown.map((r) => (
             <tr key={rowKey(r)}>
               {columns.map((c) => (
                 <td key={c.key} className={c.right ? "r" : ""}>{c.render(r)}</td>

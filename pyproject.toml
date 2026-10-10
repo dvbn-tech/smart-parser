@@ -70,5 +70,5 @@ source = ["core", "parser"]
 
 [tool.ruff.lint.per-file-ignores]
 "infra/migrations/versions/*" = ["E501"]
-"api/main.py" = ["E501"]  # SQL-запросы читаются лучше без переносов
+"api/*.py" = ["E501"]  # SQL-запросы читаются лучше без переносов
 "parser/demo.py" = ["B023"]  # замыкание snap() вызывается в той же итерации цикла

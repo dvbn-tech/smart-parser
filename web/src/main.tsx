@@ -9,6 +9,8 @@ import AnomaliesPage from "./pages/Anomalies";
 import BrandPage from "./pages/Brand";
 import BrandsPage from "./pages/Brands";
 import CandidatesPage from "./pages/Candidates";
+import CreatorsPage from "./pages/Creators";
+import InsightsPage from "./pages/Insights";
 import OverviewPage from "./pages/Overview";
 import ParserPage from "./pages/Parser";
 import "./styles.css";
@@ -34,7 +36,9 @@ function Side() {
       </div>
       <nav className="nav stack" style={{ gap: 2 }}>
         <NavLink to={`/${q}`} end>Обзор</NavLink>
+        <NavLink to={`/creators${q}`}>Креаторы</NavLink>
         <NavLink to={`/anomalies${q}`}>Аномалии</NavLink>
+        <NavLink to="/insights">Что работает</NavLink>
         <NavLink to="/brands">Бренды и креаторы</NavLink>
         <NavLink to="/candidates">
           Кандидаты {cand.data && cand.data.length > 0 && <span className="count">{cand.data.length}</span>}
@@ -59,6 +63,8 @@ function App() {
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/anomalies" element={<AnomaliesPage />} />
+          <Route path="/creators" element={<CreatorsPage />} />
+          <Route path="/insights" element={<InsightsPage />} />
           <Route path="/brands" element={<BrandsPage />} />
           <Route path="/brands/:id" element={<BrandPage />} />
           <Route path="/candidates" element={<CandidatesPage />} />
