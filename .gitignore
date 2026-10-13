@@ -11,3 +11,4 @@ poc_out/
 node_modules/
 web/dist/
 *.tsbuildinfo
+docs/import_report.md
